@@ -1,6 +1,5 @@
 # dotfiles
 
-## Order Creation
+## What are dotfiles?
 
-1. Submit order through https://makeorder.sas.com
-2. Setup order for external access: https://cr.sas.com
+dotfiles are unix user configuration files.  Most specifically a collection of files and folders which configure the terminal and/or other applications wiht the look and feel that I desire. 
