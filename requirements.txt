@@ -1,0 +1,5 @@
+ansible==8.0.0 # 2.10.7
+azure-identity
+azure.storage.blob
+pandas
+psycopg

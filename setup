@@ -1,0 +1,192 @@
+#!/bin/bash
+# Usage:
+# curl -L https://github.com/ninewb/dotfiles/setup > x && chmod +x && sudo ./x
+# update architecture versions
+
+export AZUSER=meraxes
+export X_UID=10101
+export HOSTNAME='xfce'
+export ARCH='x86'
+
+export ME='x0'
+export MYHOME="/home/${ME}"
+export ASME="sudo -u ${ME}"
+PKGARCH=${ARCH}
+
+# add hashicorp
+curl -sL https://apt.releases.hashicorp.com/gpg |
+	gpg --dearmor |
+	tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+gpg --no-default-keyring \
+	--keyring /usr/share/keyrings/hashicorp-archive-keyring.gpg \
+	--fingerprint
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+	https://apt.releases.hashicorp.com $(lsb_release -cs) main" |
+	tee /etc/apt/sources.list.d/hashicorp.list
+
+apt update &&
+	DEBIAN_FRONTEND=noninteractive apt install -y \
+	    apt-transport-https \
+		bash \
+		bash-completion \
+		bc \
+		ca-certificates \
+		curl \
+		dpkg \
+		g++ \
+		gcc \
+		gettext \
+		git \
+		golang \
+		golang-doc \
+		golang-src \
+		gpg \
+		gpg-agent \
+		gpgv \
+		gzip \
+		htop \
+		iptables \
+		iputils-ping \
+		isc-dhcp-client \
+		jq \
+		libncurses5-dev \
+		libprotobuf-dev \
+		libpq-dev \
+		libssl-dev \
+		libtool \
+		libtool-bin \
+		libutempter-dev \
+		libx11-dev \
+		libxfixes-dev \
+		lsb-base \
+		man-db \
+		manpages \
+		mawk \
+		ncurses-base \
+		ncurses-bin \
+		ncurses-term \
+		net-tools \
+		netbase \
+		nmap \
+		openssl \
+		postgresql-client-common \
+		postgresql-client \
+		python3 \
+		python3-boto \
+		python3-pip \
+		python3-venv \
+		stow \
+		sudo \
+		tar \
+		tcpdump \
+		terraform \
+		tmux \
+		traceroute \
+		tree \
+		tzdata \
+		unzip \
+		util-linux \
+		uuid-runtime \
+		vim-tiny \
+		whois \
+		xsel \
+		xvfb \
+		xz-utils \
+		zlib1g \
+		zlib1g-dev \
+		zsh \
+		zsh-syntax-highlighting
+
+# install azure-cli
+echo "Installing Azure CLI..."
+curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+# install yq
+sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
+  && chmod a+x /usr/local/bin/yq
+
+# install kubectl
+curl -sLO https://storage.googleapis.com/kubernetes-release/release/v{$KUBECTL_VERSION}/bin/linux/amd64/kubectl \
+  && mv kubectl /usr/local/bin/ \
+  && chmod a+x /usr/local/bin/kubectl 
+
+echo "setting up timezone and hostname"
+timedatectl set-timezone America/New_York
+hostname "$HOSTNAME"
+hostnamectl set-hostname "$HOSTNAME"
+sed -i '/^127\.0\.0\.1\s/s/$/ '"$HOSTNAME"'/' /etc/hosts
+sed -i '/^127\.0\.0\.1\s/s/$/ '"$HOSTNAME"'/' /etc/cloud/templates/hosts.debian.tmpl
+
+echo "creating local user"
+adduser \
+    --uid "$X_UID" \
+	--disabled-password \
+	--gecos "" \
+	--shell "$(which zsh)" "$ME"
+
+echo "granting root access"
+echo "${ME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$ME"
+
+mkdir -p $MYHOME/.ssh
+if [ -d "/home/${AZUSER}/.ssh" ]; then
+	cp /home/${AZUSER}/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
+else
+	echo "WARNING: SSH key authorization could not be automated."
+fi
+chown -R $ME:$ME ${MYHOME}/.ssh
+chmod 700 ${MYHOME}/.ssh
+chmod 600 ${MYHOME}/.ssh/*
+
+# i do not want these dirs to be symlinks
+echo "creating directory skeletons"
+$ASME mkdir -p \
+	$MYHOME/.{config,local} \
+	$MYHOME/.local/{bin,docs,cache,lib,share,src,state} \
+	$MYHOME/.local/state/zsh
+
+echo "setting up dotfiles"
+$ASME git clone https://github.com/ninewb/dotfiles.git $MYHOME/.local/src/dotfiles &&
+	cd $MYHOME/.local/src/dotfiles &&
+	$ASME stow bin git tmux zsh -t $MYHOME
+# tmux
+$ASME mkdir $MYHOME/.config/tmux/plugins &&
+	$ASME git clone --depth=1 https://github.com/tmux-plugins/tpm $MYHOME/.config/tmux/plugins/tpm &&
+	$ASME $MYHOME/.config/tmux/plugins/tpm/scripts/install_plugins.sh &&
+	cd $MYHOME/.config/tmux/plugins/tmux-thumbs &&
+	expect -c "spawn ./tmux-thumbs-install.sh; send \"\r1\r\"; expect complete" 1> /dev/null
+# nvim
+$ASME mkdir $MYHOME/.local/nvim &&
+	$ASME git clone --filter=blob:none --single-branch https://github.com/folke/lazy.nvim.git $MYHOME/.local/share/nvim/lazy
+$ASME nvim --headless "+Lazy! sync" +qa
+$ASME nvim --headless "+MasonInstallAll" +qa
+
+# shellcheck disable=SC2016
+echo 'export ZDOTDIR="$HOME"/.config/zsh' >> /etc/zsh/zshenv
+
+# setup python and pip
+$ASME pip3 install --upgrade pip
+${ASME} pip3 install -r ./requirements.txt
+
+# first user configuration
+$ASME rm $MYHOME/.profile $MYHOME/.bash*
+
+echo "building mosh"
+# OSC52 clipboard support - https://github.com/mobile-shell/mosh/pull/1104
+$ASME git clone --depth=1 https://github.com/mgulick/mosh.git -b osc-52-clipboard-types $MYHOME/.local/src/mosh &&
+	cd $MYHOME/.local/src/mosh &&
+	./autogen.sh &&
+	./configure &&
+	make &&
+	make install
+
+# terminating until we can test ephemeral construct
+exit 0
+
+echo "setup complete. rebooting the vps. reconnect as yourself via mosh"
+IP=$(curl -sL icanhazip.com)
+echo "$HOSTNAME: $ME@$IP:$PORT"
+echo "mosh location: $(which mosh-server)"
+
+# self destruct
+srm -dvrl "$0" &> /dev/null
+systemctl reboot
