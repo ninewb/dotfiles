@@ -6,13 +6,6 @@
 #  ██████ ██████ ░██  ░██
 # ░░░░░░ ░░░░░░  ░░   ░░
 #
-#  ▓▓▓▓▓▓▓▓▓▓
-# ░▓ author ▓ xero <x@xero.style>
-# ░▓ code   ▓ https://code.x-e.ro/dotfiles
-# ░▓ mirror ▓ https://git.io/.files
-# ░▓▓▓▓▓▓▓▓▓▓
-# ░░░░░░░░░░
-#
 #█▓▒░ history
 HISTSIZE=130000
 SAVEHIST=100000

@@ -6,13 +6,6 @@
 #  ██████ ██████ ░██  ░██
 # ░░░░░░ ░░░░░░  ░░   ░░
 #
-#  ▓▓▓▓▓▓▓▓▓▓
-# ░▓ author ▓ xero <x@xero.style>
-# ░▓ code   ▓ https://code.x-e.ro/dotfiles
-# ░▓ mirror ▓ https://git.io/.files
-# ░▓▓▓▓▓▓▓▓▓▓
-# ░░░░░░░░░░
-#
 #█▓▒░ autocompletion systems
 fpath=($HOME/.config/zsh/completion $fpath)
 autoload bashcompinit && bashcompinit

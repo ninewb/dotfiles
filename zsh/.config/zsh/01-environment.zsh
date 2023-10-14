@@ -6,13 +6,6 @@
 #  ██████ ██████ ░██  ░██
 # ░░░░░░ ░░░░░░  ░░   ░░
 #
-#  ▓▓▓▓▓▓▓▓▓▓
-# ░▓ author ▓ xero <x@xero.style>
-# ░▓ code   ▓ https://code.x-e.ro/dotfiles
-# ░▓ mirror ▓ https://git.io/.files
-# ░▓▓▓▓▓▓▓▓▓▓
-# ░░░░░░░░░░
-
 #█▓▒░ clean home
 export XDG_CONFIG_HOME="$HOME"/.config
 export NAVE_DIR="$HOME"/.local/lib/nodejs
@@ -24,8 +17,6 @@ export XDG_CACHE_HOME="$HOME"/.local/cache
 export XDG_STATE_HOME="$HOME"/.local/state
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:=/tmp}"
 export ZDOTDIR="$HOME"/.config/zsh
-export AWS_SHARED_CREDENTIALS_FILE="$XDG_CONFIG_HOME"/aws/credentials
-export AWS_CONFIG_FILE="$XDG_CONFIG_HOME"/aws/config
 export GNUPGHOME="$XDG_DATA_HOME"/gpg
 export NPM_CONFIG_USERCONFIG="$XDG_CONFIG_HOME"/npm/npmrc
 export NPM_CONFIG_PREFIX="$XDG_DATA_HOME"/npm
