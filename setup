@@ -5,10 +5,10 @@
 
 export AZUSER=meraxes
 export X_UID=10101
-export HOSTNAME='zfce'
+export HOSTNAME='fce'
 export ARCH='x86'
 
-export ME='az0'
+export ME='x1'
 export MYHOME="/home/${ME}"
 export ASME="sudo -u ${ME}"
 export PKGARCH=${ARCH}
@@ -219,6 +219,8 @@ mkdir -p /workspace
 chown -R ${ME}:${ME} /workspace
 chmod -R 755 /workspace
 
+exit 0
+
 _echo "building mosh"
 # OSC52 clipboard support - https://github.com/mobile-shell/mosh/pull/1104
 $ASME git clone --depth=1 https://github.com/mgulick/mosh.git -b osc-52-clipboard-types $MYHOME/.local/src/mosh &&
@@ -228,15 +230,11 @@ $ASME git clone --depth=1 https://github.com/mgulick/mosh.git -b osc-52-clipboar
 	make &&
 	make install
 
-# terminating until we can test ephemeral construct
 
 _echo "setup complete. rebooting the shell...reconnect as yourself via mosh"
 IP=$(curl -sL icanhazip.com)
 echo "$HOSTNAME: $ME@$IP:$PORT"
 echo "mosh location: $(which mosh-server)"
-
-_echo "stopping before reboot for testing"
-exit 0
 
 # self destruct
 srm -dvrl "$0" &> /dev/null
