@@ -43,17 +43,22 @@ function account() {
 _echo "adding external sources to apt"
 ####################################################
 
+# add github
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg &&
+	chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg &&
+	echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
 # add 1pw
-curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg &&
+curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --yes --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg &&
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/$(dpkg --print-architecture) stable main" | tee /etc/apt/sources.list.d/1password.list > /dev/null
 mkdir -p /etc/debsig/policies/AC2D62742012EA22/ &&
         curl -sS https://downloads.1password.com/linux/debian/debsig/1password.pol | tee /etc/debsig/policies/AC2D62742012EA22/1password.pol
 mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22 &&
-        curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
+        curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --yes --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
 
 # add hashicorp
 curl -sL https://apt.releases.hashicorp.com/gpg |
-        gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        gpg --yes --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
 gpg --no-default-keyring --keyring /usr/share/keyrings/hashicorp-archive-keyring.gpg --fingerprint
 echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
         https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
@@ -68,7 +73,7 @@ apt -qq update &&
                 apt-transport-https \
                 bash bash-completion bc \
                 ca-certificates curl \
-                dpkg docker.io fzf \
+                expect dpkg docker.io fzf \
                 g++ gcc gettext git golang golang-doc golang-src gpg gpg-agent gpgv gzip \
                 htop \
                 iptables iputils-ping isc-dhcp-client \
@@ -209,7 +214,17 @@ mkdir -p /workspace
 chown -R ${ME}:${ME} /workspace
 chmod -R 775 /workspace
 
-# These should run automatically with the stow through the zsh symlinking
-#eval "$(starship init zsh)"
-#mkdir -p ~/.config && touch ~/.config/starship.toml
+### SECTION ########################################
+_echo "final user setup stuff"
+####################################################
+
+getfile fce config keys post > $MYHOME/post
+op signout --account fce --forget
+$ASME rm $MYHOME/.profile $MYHOME/.bash*
+mv $MYHOME/go $MYHOME/.local/lib/
+mv $MYHOME/.cache $MYHOME/cache
+mv $MYHOME/cache/* $MYHOME/cache
+rm -rf $MYHOME/.npm
+chmod +x $MYHOME/post
+chown -R $ME:$ME /home/$ME
 
