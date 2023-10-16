@@ -74,7 +74,7 @@ apt -qq update &&
                 bash bash-completion bc \
                 ca-certificates curl \
                 expect dpkg docker.io fzf \
-                g++ gcc gettext git golang golang-doc golang-src gpg gpg-agent gpgv gzip \
+                g++ gcc gettext gh git golang golang-doc golang-src gpg gpg-agent gpgv gzip \
                 htop \
                 iptables iputils-ping isc-dhcp-client \
                 jq \
@@ -185,6 +185,12 @@ _echo "setting up 1password"
 
 account fce "fce@devoutarchitect.com"
 eval "$(op signin --account fce)"
+
+### SECTION ########################################
+_echo "setting up key keychain"
+####################################################
+
+get fce GH_TOKEN | ${ASME} gh auth login -p ssh --with-token
 
 ### SECTION ########################################
 _echo "setting up dotfiles"
