@@ -3,21 +3,25 @@
 # curl -L https://github.com/ninewb/dotfiles/setup > x && chmod +x && sudo ./x
 # update architecture versions
 
-export AZUSER=meraxes
-export X_UID=10101
-export HOSTNAME='fce'
+export AZUSER=azadmin
+export FCEUID=10101
+export HOSTNAME='meraxes'
 export ARCH='x86'
 
-export ME='x1'
+export ME='fce'
 export MYHOME="/home/${ME}"
 export ASME="sudo -u ${ME}"
 export PKGARCH=${ARCH}
 
-function _echo() { printf "\n╓───── %s \n╙────────────────────────────────────── ─ ─ \n" "$1"; }
 [ "$(id -u)" -ne 0 ] && {
-	_echo "got root?" >&2
-	exit 1
+        _echo "got root?" >&2
+        exit 1
 }
+
+# heading function
+function _echo() { printf "\n╓───── %s \n╙────────────────────────────────────── ─ ─ \n" "$1"; }
+
+# 1p functions
 function get() {
         f="${3:-notesPlain}"
         op item get "$2" --account "$1" --fields "$f" --format json | jq -rM '.value'
@@ -32,7 +36,11 @@ function account() {
                 --address "$domain" \
                 --email "$2" \
                 --shorthand "$1"
-}               
+}
+
+### SECTION ########################################
+_echo "adding external sources to apt"
+####################################################
 
 # add 1pw
 curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg &&
@@ -44,198 +52,147 @@ mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22 &&
 
 # add hashicorp
 curl -sL https://apt.releases.hashicorp.com/gpg |
-	gpg --dearmor |
-	tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
-gpg --no-default-keyring \
-	--keyring /usr/share/keyrings/hashicorp-archive-keyring.gpg \
-	--fingerprint
+        gpg --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+gpg --no-default-keyring --keyring /usr/share/keyrings/hashicorp-archive-keyring.gpg --fingerprint
 echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
-	https://apt.releases.hashicorp.com $(lsb_release -cs) main" |
-	tee /etc/apt/sources.list.d/hashicorp.list
+        https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+
+### SECTION ########################################
+_echo "install managed packages"
+####################################################
 
 apt -qq update &&
-	DEBIAN_FRONTEND=noninteractive apt -qq install -y \
-	        1password-cli \
-	        apt-transport-https \
-		bash \
-		bash-completion \
-		bc \
-		ca-certificates \
-		curl \
-		dpkg \
-		g++ \
-		gcc \
-		gettext \
-		git \
-		golang \
-		golang-doc \
-		golang-src \
-		gpg \
-		gpg-agent \
-		gpgv \
-		gzip \
-		htop \
-		iptables \
-		iputils-ping \
-		isc-dhcp-client \
-		jq \
-		libncurses5-dev \
-		libprotobuf-dev \
-		libpq-dev \
-		libssl-dev \
-		libtool \
-		libtool-bin \
-		libutempter-dev \
-		libx11-dev \
-		libxfixes-dev \
-		lsb-base \
-		man-db \
-		manpages \
-		ncurses-base \
-		ncurses-bin \
-		ncurses-term \
-		net-tools \
-		netbase \
-		nmap \
-		openssl \
-		postgresql-client-common \
-		postgresql-client \
-		python3 \
-		python3-boto \
-		python3-pip \
-		python3-venv \
-		stow \
-		sudo \
-		tar \
-		tcpdump \
-		terraform \
-		tmux \
-		traceroute \
-		tree \
-		tzdata \
-		unzip \
-		util-linux \
-		uuid-runtime \
-		vim-tiny \
-		whois \
-		xsel \
-		xvfb \
-		xz-utils \
-		zlib1g \
-		zlib1g-dev \
-		zsh \
-		zsh-syntax-highlighting
+        DEBIAN_FRONTEND=noninteractive apt -qq install -y \
+                1password-cli \
+                apt-transport-https \
+                bash bash-completion bc \
+                ca-certificates curl \
+                dpkg docker.io fzf \
+                g++ gcc gettext git golang golang-doc golang-src gpg gpg-agent gpgv gzip \
+                htop \
+                iptables iputils-ping isc-dhcp-client \
+                jq \
+                libncurses5-dev libprotobuf-dev libpq-dev libssl-dev libtool libtool-bin \
+                libutempter-dev libx11-dev libxfixes-dev lsb-base \
+                man-db manpages \
+                ncurses-base ncurses-bin ncurses-term neovim net-tools netbase nmap \
+                openssl \
+                postgresql-client-common postgresql-client \
+                python3 python3-boto python3-pip python3-venv python3-neovim \
+                stow sudo \
+                tar tcpdump terraform tmux traceroute tree tzdata \
+                unzip util-linux uuid-runtime \
+                vim-tiny \
+                whois \
+                xsel xvfb xz-utils \
+                zlib1g zlib1g-dev zsh zsh-syntax-highlighting
+              
+### SECTION ########################################
+_echo "install unmanaged packages"
+####################################################
 
-_echo "installing unmanaged packages"
 # install azure-cli
 curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+# install kubectl
+curl -sLO https://storage.googleapis.com/kubernetes-release/release/v{$KUBECTL_VERSION}/bin/linux/amd64/kubectl \
+  && mv kubectl /usr/local/bin/ \
+  && chmod a+x /usr/local/bin/kubectl
+  
+# install starship
+curl -sS https://starship.rs/install.sh | sh
 
 # install yq
 sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
   && chmod a+x /usr/local/bin/yq
 
-# install kubectl
-curl -sLO https://storage.googleapis.com/kubernetes-release/release/v{$KUBECTL_VERSION}/bin/linux/amd64/kubectl \
-  && mv kubectl /usr/local/bin/ \
-  && chmod a+x /usr/local/bin/kubectl 
+### SECTION ########################################
+_echo "start and enable daemons"
+####################################################
 
-echo "setting up rust"
-curl https://sh.rustup.rs -sSf | $ASME CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" sh -s -- -y --default-toolchain stable --profile default &&
-        $ASME CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" $MYHOME/.local/lib/cargo/bin/cargo install cargo-quickinstall &&
-        $ASME CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" $MYHOME/.local/lib/cargo/bin/cargo quickinstall lolcat stylua
+sudo systemctl start docker.service
+sudo systemctl enable docker.service
 
-_echo "setting up starship"
-if [[ "$ARCH" == "arm" ]]; then
-        curl -sS https://starship.rs/install.sh | sh
-else  
-        $ASME CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" $MYHOME/.local/lib/cargo/bin/cargo quickinstall starship
-fi
+### SECTION ########################################
+_echo "setup user and shell"
+####################################################
+# startship custom configuration
+# export STARSHIP_CONFIG=~/example/non/default/path/starship.toml
+# export STARSHIP_CACHE=~/.starship/cache
 
+# configure starship
+${ASME} eval "$(starship init zsh)"
+${ASME} mkdir -p ~/.config && touch ~/.config/starship.toml
+
+### SECTION ########################################
 _echo "setting up timezone and hostname"
+####################################################
+
 timedatectl set-timezone America/New_York
-hostname "$HOSTNAME"
-hostnamectl set-hostname "$HOSTNAME"
+hostname "${HOSTNAME}"
+hostnamectl set-hostname "${HOSTNAME}"
 sed -i '/^127\.0\.0\.1\s/s/$/ '"$HOSTNAME"'/' /etc/hosts
 sed -i '/^127\.0\.0\.1\s/s/$/ '"$HOSTNAME"'/' /etc/cloud/templates/hosts.debian.tmpl
 
+### SECTION ########################################
 _echo "creating local user"
+####################################################
+
 adduser \
-    --uid "$X_UID" \
-	--disabled-password \
-	--gecos "" \
-	--shell "$(which zsh)" "$ME"
+    --uid "$FCE_UID" \
+        --disabled-password \
+        --gecos "" \
+        --shell "$(which zsh)" "${ME}"
 
-_echo "granting root access"
-echo "${ME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$ME"
-
-mkdir -p $MYHOME/.ssh
+mkdir -p ${MYHOME}/.ssh
 if [ -d "/home/${AZUSER}/.ssh" ]; then
-	cp /home/${AZUSER}/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
+        cp /home/${AZUSER}/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
 else
-	echo "WARNING: SSH key authorization could not be automated."
+        echo "WARNING: SSH key authorization could not be automated."
 fi
-chown -R $ME:$ME ${MYHOME}/.ssh
+chown -R ${ME}:${ME} ${MYHOME}/.ssh
 chmod 700 ${MYHOME}/.ssh
 chmod 600 ${MYHOME}/.ssh/*
 
-_echo "setting up 1password"
-account x0 "x@xero.style"
-eval "$(op signin --account x0)"
 
-# i do not want these dirs to be symlinks
+### SECTION ########################################
+_echo "granting root access"
+####################################################
+
+echo "${ME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${ME}"
+
+### SECTION ########################################
 _echo "creating directory skeletons"
-$ASME mkdir -p \
-	$MYHOME/.{config,local} \
-	$MYHOME/.local/{bin,docs,cache,lib,share,src,state} \
-	$MYHOME/.local/state/zsh
+####################################################
 
+${ASME} mkdir -p \
+        $MYHOME/.{config,local} \
+        $MYHOME/.local/{bin,cache,docs,lib,share,src,state} \
+        $MYHOME/.local/state/zsh/history
+
+### SECTION ########################################
 _echo "setting up dotfiles"
-$ASME git clone https://github.com/ninewb/dotfiles.git $MYHOME/.local/src/dotfiles &&
-	cd $MYHOME/.local/src/dotfiles &&
-	$ASME stow bin git tmux zsh -t $MYHOME
-# tmux
-$ASME mkdir $MYHOME/.config/tmux/plugins &&
-	$ASME git clone --depth=1 https://github.com/tmux-plugins/tpm $MYHOME/.config/tmux/plugins/tpm &&
-	$ASME $MYHOME/.config/tmux/plugins/tpm/scripts/install_plugins.sh &&
-	cd $MYHOME/.config/tmux/plugins/tmux-thumbs &&
-	expect -c "spawn ./tmux-thumbs-install.sh; send \"\r1\r\"; expect complete" 1> /dev/null
-# nvim
-$ASME mkdir $MYHOME/.local/nvim &&
-	$ASME git clone --filter=blob:none --single-branch https://github.com/folke/lazy.nvim.git $MYHOME/.local/share/nvim/lazy
-$ASME nvim --headless "+Lazy! sync" +qa
-$ASME nvim --headless "+MasonInstallAll" +qa
+####################################################
 
-# shellcheck disable=SC2016
-echo 'export ZDOTDIR="$HOME"/.config/zsh' >> /etc/zsh/zshenv
+${ASME} git clone https://github.com/ninewb/dotfiles.git $MYHOME/.dotfiles &&
+        cd $MYHOME/.dotfiles &&
+        $ASME stow bin git neovim ssh tmux zsh -t $MYHOME
 
-_echo "setup python and pip"
-$ASME pip3 install --upgrade pip
-${ASME} pip3 install -r ./requirements.txt
+### SECTION ########################################
+_echo "tmux plugins"
+####################################################
+        
+$ASME mkdir ${MYHOME}/.config/tmux/plugins &&
+        $ASME git clone --depth=1 https://github.com/tmux-plugins/tpm ${MYHOME}/.config/tmux/plugins/tpm &&
+        $ASME ${MYHOME}/.config/tmux/plugins/tpm/scripts/install_plugins.sh &&
+        cd ${MYHOME}/.config/tmux/plugins/tmux-thumbs &&
+        expect -c "spawn ./tmux-thumbs-install.sh; send \"\r1\r\"; expect complete" 1> /dev/null
 
-# first user configuration
-$ASME rm $MYHOME/.profile $MYHOME/.bash*
+### SECTION ########################################
+_echo "create workspace"
+####################################################
 
 mkdir -p /workspace
 chown -R ${ME}:${ME} /workspace
-chmod -R 755 /workspace
+chmod -R 775 /workspace
 
-exit 0
-
-_echo "building mosh"
-# OSC52 clipboard support - https://github.com/mobile-shell/mosh/pull/1104
-$ASME git clone --depth=1 https://github.com/mgulick/mosh.git -b osc-52-clipboard-types $MYHOME/.local/src/mosh &&
-	cd $MYHOME/.local/src/mosh &&
-	./autogen.sh &&
-	./configure &&
-	make &&
-	make install
-
-
-_echo "setup complete. rebooting the shell...reconnect as yourself via mosh"
-IP=$(curl -sL icanhazip.com)
-echo "$HOSTNAME: $ME@$IP:$PORT"
-echo "mosh location: $(which mosh-server)"
-
-# self destruct
-srm -dvrl "$0" &> /dev/null
-systemctl reboot
