@@ -183,7 +183,7 @@ echo "${ME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${ME}"
 _echo "setting up 1password"
 ####################################################
 
-account fce "fce@devoutarchitect.com"
+account fce "nnewbill@gmail.com"
 eval "$(op signin --account fce)"
 
 ### SECTION ########################################
