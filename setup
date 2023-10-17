@@ -40,6 +40,23 @@ function account() {
 }
 
 ### SECTION ########################################
+_echo "installing runtime deps"
+####################################################
+
+apt update && apt install -y apt-transport-https ca-certificates git gpg bash curl locales gnupg software-properties-common
+
+### SECTION ########################################
+_echo "setting up locales and console"
+####################################################
+
+locale-gen "en_US.UTF-8"
+localectl set-locale en_US.UTF-8
+dpkg-reconfigure locales
+dpkg-reconfigure console-setup
+systemctl daemon-reload
+systemctl restart console-setup.service
+
+### SECTION ########################################
 _echo "adding external sources to apt"
 ####################################################
 
@@ -56,6 +73,12 @@ mkdir -p /etc/debsig/policies/AC2D62742012EA22/ &&
 mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22 &&
         curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --yes --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
 
+# add docker
+
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add - &&
+	sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
+apt-cache policy docker-ce
+
 # add hashicorp
 curl -sL https://apt.releases.hashicorp.com/gpg |
         gpg --yes --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
@@ -70,11 +93,9 @@ _echo "install managed packages"
 apt -qq update &&
         DEBIAN_FRONTEND=noninteractive apt -qq install -y \
                 1password-cli \
-                apt-transport-https \
-                bash bash-completion bc \
-                ca-certificates curl \
-                expect dpkg docker.io fzf \
-                g++ gcc gettext gh git golang golang-doc golang-src gpg gpg-agent gpgv gzip \
+                bash-completion bc \
+                expect dpkg docker-ce fzf \
+                g++ gcc gettext gh golang golang-doc golang-src gpg-agent gpgv gzip \
                 htop \
                 iptables iputils-ping isc-dhcp-client \
                 jq \
@@ -135,6 +156,8 @@ adduser \
         --disabled-password \
         --gecos "" \
         --shell "$(which zsh)" "${ME}"
+
+sudo usermod -aG docker ${ME}
 
 ### SECTION #######################################
 _echo "setting up key keychain"
@@ -223,6 +246,20 @@ $ASME mkdir -p ${MYHOME}/.config/tmux/plugins &&
         ${ASME} ${MYHOME}/.config/tmux/plugins/tpm/scripts/install_plugins.sh &&
         cd ${MYHOME}/.config/tmux/plugins/tmux-thumbs &&
         expect -c "spawn ./tmux-thumbs-install.sh; send \"\r1\r\"; expect complete" 1> /dev/null
+
+### SECTION ########################################
+_echo "setting up ascii/ansi art tools"
+####################################################
+
+rm -rf /usr/share/figlet/
+git clone --depth=1 https://github.com/xero/figlet-fonts.git /usr/share/figlet/
+$ASME git clone --depth=1 https://github.com/digitallyserviced/tdfgo.git $MYHOME/.local/src/tdfgo &&
+	cd $MYHOME/.local/src/tdfgo &&
+	$ASME go build &&
+	mv ./tdfgo $MYHOME/.local/bin/tdfgo &&
+	chmod +x $MYHOME/.local/bin/tdfgo &&
+	mkdir -p $MYHOME/.config/tdfgo &&
+	mv ./fonts $MYHOME/.config/tdfgo/fonts
 
 ### SECTION ########################################
 _echo "create workspace"
