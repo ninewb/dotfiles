@@ -136,12 +136,24 @@ adduser \
         --gecos "" \
         --shell "$(which zsh)" "${ME}"
 
+### SECTION #######################################
+_echo "setting up key keychain"
+###################################################
+
+get fce GH_TOKEN | ${ASME} gh auth login -p ssh --with-token
 mkdir -p ${MYHOME}/.ssh
-if [ -d "/home/${AZUSER}/.ssh" ]; then
-        cp /home/${AZUSER}/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
+if [[ -d /home/admin/.ssh ]]; then
+	cp /home/${AZUSER}/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
 else
-        echo "WARNING: SSH key authorization could not be automated."
+	cp /root/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
 fi
+
+#get fce id_ed25519_github privateKey > ${MYHOME}/.ssh/id_ed25519
+op item get likvwv35ej47zccfq7qg2fftle --reveal --format json|jq '.fields[] | select(.id == "private_key") | .ssh_formats.openssh.value'
+get fce id_edd25519 "public key"> ${MYHOME}/.ssh/id_ed25519.pub
+ssh-keyscan -p 22 -H github.com gist.github.com > /root/.ssh/known_hosts
+${ASME} ssh-keyscan -p 22 -H github.com gist.github.com > ${MYHOME}/.ssh/known_hosts
+
 chown -R ${ME}:${ME} ${MYHOME}/.ssh
 chmod 700 ${MYHOME}/.ssh
 chmod 600 ${MYHOME}/.ssh/*
