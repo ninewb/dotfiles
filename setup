@@ -3,6 +3,7 @@
 # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 # curl -L https://github.com/ninewb/dotfiles/setup > x && chmod +x && sudo ./x
 # update architecture versions
+# addative
 
 export AZUSER=azadmin
 export FCE_UID=10101
