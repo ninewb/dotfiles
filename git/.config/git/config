@@ -1,7 +1,7 @@
 [user]
-	name = fce
-	email = z@ferociouschipeater.com
-	signingkey = 00311XFCE
+	name = Nick Newbill
+	email = x@ferociouschipeater.com
+	signingkey = 2FA16D0B3140DE75
 [credential]
 	helper = cache
 [alias]
@@ -22,3 +22,5 @@
 	program = gpg
 [core]
      attributesFile = ~/.config/git/gitattributes
+[commit]
+	gpgsign = true
