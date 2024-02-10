@@ -37,11 +37,9 @@ alias se="sudo $EDITOR"
 alias ec='nvim --cmd ":lua vim.g.noplugins=1" ' #nvim --clean
 alias g="git"
 alias y="yank"
-alias k="vpnns -- kubectl"
 alias kx="kubectx"
-alias k9s="vpnns -- k9s"
-alias tgp="vpnns -- terragrunt plan"
-alias tga="vpnns -- terragrunt apply"
+alias py=/usr/bin/python3.12
+alias python=/usr/bin/python3.12
 alias disks='echo "╓───── m o u n t . p o i n t s"; echo "╙────────────────────────────────────── ─ ─ "; lsblk -a; echo ""; echo "╓───── d i s k . u s a g e";echo "╙────────────────────────────────────── ─ ─ "; df -h;echo "╓───── s w a p s "; echo "╙────────────────────────────────────── ─ ─ "; swapon --show'
 
 #lazy
@@ -98,13 +96,6 @@ alias ripfull="sudo srm -dlv"
 alias checkrootkits="sudo rkhunter --update; sudo rkhunter --propupd; sudo rkhunter --check"
 alias checkvirus="clamscan --recursive=yes --infected /home"
 alias updateantivirus="sudo freshclam"
-
-#silly
-alias xyzzy="echo nothing happens"
-alias fuck='sudo $(fc -ln -1)'
-alias lol="base64 </dev/urandom | lolcat"
-alias matrix="cmatrix -b"
-alias zen="while :; do bonsai -l -b 2 -c oO0 -t 0.5; sleep 10; done"
 
 #█▓▒░ 1password
 function 1pwaccount() {

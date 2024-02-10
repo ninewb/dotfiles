@@ -1,7 +1,6 @@
 [user]
 	name = Nick Newbill
 	email = x@ferociouschipeater.com
-	signingkey = 2FA16D0B3140DE75
 [credential]
 	helper = cache
 [alias]
@@ -23,4 +22,4 @@
 [core]
      attributesFile = ~/.config/git/gitattributes
 [commit]
-	gpgsign = true
+	gpgsign = false
