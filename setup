@@ -1,286 +1,317 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# shellcheck disable=SC2155,SC1091
+set -euo pipefail
+
+# ==============================================================================
+# Dotfiles bootstrap (Linux + macOS)
+#
+# Goals (minimal, fast, and reproducible):
+#   - alacritty
+#   - neovim
+#   - tmux
+#   - 1password-cli (op)
+#   - kubectl
+#   - cargo (rustup)
+#   - stow
+#   - zsh
+#
 # Usage:
-# https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-# curl -L https://github.com/ninewb/dotfiles/setup > x && chmod +x && sudo ./x
-# update architecture versions
-# addative
+#   curl -fsSL https://raw.githubusercontent.com/ninewb/dotfiles/main/setup | bash
+#
+# Optional env vars:
+#   DOTFILES_REPO   (default: https://github.com/ninewb/dotfiles.git)
+#   DOTFILES_DIR    (default: $HOME/.local/src/dotfiles)
+#   STOW_PACKAGES   (default: "bin git neovim tmux zsh")
+#   DO_STOW         (default: 1)  set to 0 to skip stow
+#   INSTALL_GUI     (default: 1)  set to 0 to skip GUI apps (e.g., Alacritty on mac)
+#   INSTALL_1PW      (default: 1) set to 0 to skip 1Password CLI
+#   INSTALL_KUBECTL  (default: 1) set to 0 to skip kubectl
+#   INSTALL_RUST     (default: 1) set to 0 to skip rustup/cargo
+# ============================================================================== 
 
-export AZUSER=azadmin
-export FCE_UID=10101
-export HOSTNAME='meraxes'
-export ARCH='x86'
+# -------- Pretty output --------
+_hr() { printf '%*s\n' "${COLUMNS:-80}" '' | tr ' ' '─'; }
+_h() { printf "\n%s\n" "$( _hr )"; printf "%s\n" "$1"; printf "%s\n" "$( _hr )"; }
 
-export ME='fce'
-export MYHOME="/home/${ME}"
-export ASME="sudo -u ${ME}"
-export PKGARCH=${ARCH}
+# -------- OS detection --------
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+IS_DARWIN=0
+IS_LINUX=0
+case "$OS" in
+  Darwin) IS_DARWIN=1 ;;
+  Linux)  IS_LINUX=1 ;;
+  *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
+ esac
 
-[ "$(id -u)" -ne 0 ] && {
-        _echo "got root?" >&2
-        exit 1
+# -------- Defaults --------
+: "${DOTFILES_REPO:=https://github.com/ninewb/dotfiles.git}"
+: "${DOTFILES_DIR:=$HOME/.local/src/dotfiles}"
+: "${STOW_PACKAGES:=bin git neovim tmux zsh}"
+: "${DO_STOW:=1}"
+: "${INSTALL_GUI:=1}"
+: "${INSTALL_1PW:=1}"
+: "${INSTALL_KUBECTL:=1}"
+: "${INSTALL_RUST:=1}"
+
+# -------- Helpers --------
+has() { command -v "$1" >/dev/null 2>&1; }
+need_cmd() { has "$1" || { echo "Missing required command: $1" >&2; return 1; }; }
+
+# macOS brew path (Apple Silicon uses /opt/homebrew)
+ensure_brew_in_path() {
+  if [[ $IS_DARWIN -eq 1 ]]; then
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
+  fi
 }
 
-# heading function
-function _echo() { printf "\n╓───── %s \n╙────────────────────────────────────── ─ ─ \n" "$1"; }
+# -------- Package installation --------
+install_macos_packages() {
+  _h "macOS: installing packages (Homebrew)"
 
-# 1p functions
-function get() {
-        f="${3:-notesPlain}"
-        op item get "$2" --account "$1" --fields "$f" --format json | jq -rM '.value'
+  if ! has brew; then
+    echo "Homebrew not found. Installing..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+  ensure_brew_in_path
+
+  # CLI essentials
+  brew update
+  brew install \
+    git \
+    stow \
+    neovim \
+    tmux \
+    zsh \
+    jq \
+    fzf \
+    python
+
+  if [[ "$INSTALL_1PW" == "1" ]]; then
+    brew install 1password-cli
+  fi
+
+  if [[ "$INSTALL_KUBECTL" == "1" ]]; then
+    brew install kubectl
+  fi
+
+  if [[ "$INSTALL_GUI" == "1" ]]; then
+    # GUI apps are installed via casks
+    brew install --cask alacritty
+  fi
 }
-function getfile() {
-        f="${4:-notesPlain}"
-        op --account "$1" read "op://$2/$3/$f"
+
+install_linux_packages() {
+  _h "Linux: installing packages (apt)"
+
+  # Prefer Ubuntu/Debian apt-based flows.
+  need_cmd apt-get
+
+  sudo apt-get update -y
+  sudo apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    gnupg \
+    jq \
+    locales \
+    stow \
+    tmux \
+    neovim \
+    zsh \
+    fzf \
+    python3 \
+    python3-pip
+
+  # Alacritty availability varies by distro; try apt first.
+  if [[ "$INSTALL_GUI" == "1" ]]; then
+    if ! dpkg -s alacritty >/dev/null 2>&1; then
+      sudo apt-get install -y alacritty || true
+    fi
+  fi
+
+  if [[ "$INSTALL_1PW" == "1" ]]; then
+    if ! has op; then
+      _h "Linux: installing 1Password CLI (op)"
+      # 1Password official repo install (Debian/Ubuntu)
+      sudo mkdir -p /etc/apt/keyrings
+      curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
+        | sudo gpg --dearmor --yes -o /etc/apt/keyrings/1password-archive-keyring.gpg
+
+      # Determine codename (fallback to jammy)
+      local codename=""
+      codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+      if [[ -z "$codename" ]]; then codename="jammy"; fi
+
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/$(dpkg --print-architecture) stable main" \
+        | sudo tee /etc/apt/sources.list.d/1password.list >/dev/null
+
+      sudo apt-get update -y
+      sudo apt-get install -y 1password-cli
+    fi
+  fi
+
+  if [[ "$INSTALL_KUBECTL" == "1" ]]; then
+    _h "Linux: ensuring kubectl"
+    if ! has kubectl; then
+      # Install latest stable kubectl
+      local ver
+      ver="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+      curl -fsSLO "https://dl.k8s.io/release/${ver}/bin/linux/amd64/kubectl"
+      sudo install -m 0755 kubectl /usr/local/bin/kubectl
+      rm -f kubectl
+    fi
+  fi
 }
-function account() {
-        domain="${3:-my}.1password.com"
-        op account add \
-                --address "$domain" \
-                --email "$2" \
-                --shorthand "$1"
+
+# -------- Rust / Cargo --------
+install_rustup() {
+  [[ "$INSTALL_RUST" == "1" ]] || return 0
+
+  _h "Installing Rust (rustup/cargo)"
+
+  if has cargo; then
+    echo "cargo already present: $(command -v cargo)"
+    return 0
+  fi
+
+  # rustup installs into ~/.cargo and ~/.rustup by default
+  curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile default --default-toolchain stable
+
+  # Ensure current shell sees cargo for the rest of the script
+  export PATH="$HOME/.cargo/bin:$PATH"
 }
 
-### SECTION ########################################
-_echo "installing runtime deps"
-####################################################
+# -------- Zsh as default shell --------
+ensure_zsh_default_shell() {
+  _h "Ensuring zsh is the default shell"
 
-apt update && apt install -y apt-transport-https ca-certificates git gpg bash curl locales gnupg software-properties-common
+  if ! has zsh; then
+    echo "zsh not installed; skipping default shell change." >&2
+    return 0
+  fi
 
-### SECTION ########################################
-_echo "setting up locales and console"
-####################################################
+  # macOS: chsh is fine; Linux: may require sudo depending on environment
+  local zsh_path="$(command -v zsh)"
 
-locale-gen "en_US.UTF-8"
-localectl set-locale en_US.UTF-8
-dpkg-reconfigure locales
-dpkg-reconfigure console-setup
-systemctl daemon-reload
-systemctl restart console-setup.service
+  # Ensure zsh is listed in /etc/shells on Linux
+  if [[ $IS_LINUX -eq 1 ]]; then
+    if ! grep -qx "$zsh_path" /etc/shells; then
+      echo "$zsh_path" | sudo tee -a /etc/shells >/dev/null
+    fi
+  fi
 
-### SECTION ########################################
-_echo "adding external sources to apt"
-####################################################
+  if [[ "${SHELL:-}" != "$zsh_path" ]]; then
+    echo "Changing default shell to: $zsh_path"
+    chsh -s "$zsh_path" || true
+  fi
+}
 
-# add github
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg &&
-	chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg &&
-	echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+# -------- Dotfiles clone + stow --------
+setup_dotfiles() {
+  _h "Cloning dotfiles"
 
-# add 1pw
-curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --yes --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg &&
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/$(dpkg --print-architecture) stable main" | tee /etc/apt/sources.list.d/1password.list > /dev/null
-mkdir -p /etc/debsig/policies/AC2D62742012EA22/ &&
-        curl -sS https://downloads.1password.com/linux/debian/debsig/1password.pol | tee /etc/debsig/policies/AC2D62742012EA22/1password.pol
-mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22 &&
-        curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --yes --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
+  mkdir -p "$(dirname "$DOTFILES_DIR")"
 
-# add docker
+  if [[ -d "$DOTFILES_DIR/.git" ]]; then
+    echo "Dotfiles already cloned: $DOTFILES_DIR"
+  else
+    git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
+  fi
 
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add - &&
-	sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
-apt-cache policy docker-ce
+  if [[ "$DO_STOW" == "1" ]]; then
+    _h "Stowing packages: $STOW_PACKAGES"
+    ( cd "$DOTFILES_DIR" && stow $STOW_PACKAGES -t "$HOME" )
+  else
+    echo "Skipping stow (DO_STOW=0)"
+  fi
 
-# add hashicorp
-curl -sL https://apt.releases.hashicorp.com/gpg |
-        gpg --yes --dearmor | tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
-gpg --no-default-keyring --keyring /usr/share/keyrings/hashicorp-archive-keyring.gpg --fingerprint
-echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
-        https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+  # Ensure ZDOTDIR is consistent with your repo expectation
+  # Only add if not already present
+  local zshenv=""
+  if [[ $IS_DARWIN -eq 1 ]]; then
+    zshenv="$HOME/.zshenv"
+  else
+    # System zshenv is common on Linux; keep user-scoped and non-root
+    zshenv="$HOME/.zshenv"
+  fi
 
-### SECTION ########################################
-_echo "install managed packages"
-####################################################
+  if [[ ! -f "$zshenv" ]] || ! grep -q 'export ZDOTDIR=' "$zshenv"; then
+    echo 'export ZDOTDIR="$HOME"/.config/zsh' >> "$zshenv"
+  fi
+}
 
-apt -qq update &&
-        DEBIAN_FRONTEND=noninteractive apt -qq install -y \
-                1password-cli \
-                bash-completion bc \
-                expect dpkg docker-ce fzf \
-                g++ gcc gettext gh golang golang-doc golang-src gpg-agent gpgv gzip \
-                htop \
-                iptables iputils-ping isc-dhcp-client \
-                jq \
-                libncurses5-dev libprotobuf-dev libpq-dev libssl-dev libtool libtool-bin \
-                libutempter-dev libx11-dev libxfixes-dev lsb-base \
-                man-db manpages \
-                ncurses-base ncurses-bin ncurses-term neovim net-tools netbase nmap \
-                openssl \
-                postgresql-client-common postgresql-client \
-                python3 python3-boto python3-pip python3-venv python3-neovim \
-                spellcheck stow sudo \
-                tar tcpdump terraform tmux traceroute tree tzdata \
-                unzip util-linux uuid-runtime \
-                vim-tiny \
-                whois \
-                xsel xvfb xz-utils \
-                zlib1g zlib1g-dev zsh zsh-syntax-highlighting
-              
-### SECTION ########################################
-_echo "install unmanaged packages"
-####################################################
+# -------- Alacritty config sanity --------
+post_checks() {
+  _h "Post-install checks"
 
-# install azure-cli
-curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+  echo "OS: $OS ($ARCH)"
 
-# install kubectl
-curl -sLO https://storage.googleapis.com/kubernetes-release/release/v{$KUBECTL_VERSION}/bin/linux/amd64/kubectl \
-  && mv kubectl /usr/local/bin/ \
-  && chmod a+x /usr/local/bin/kubectl
+  for c in git stow nvim tmux zsh python3 pip3; do
+    if has "$c"; then
+      echo "OK: $c -> $(command -v "$c")"
+    else
+      echo "MISSING: $c" >&2
+    fi
+  done
 
-# install yq
-sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 \
-  && chmod a+x /usr/local/bin/yq
+  if [[ "$INSTALL_1PW" == "1" ]]; then
+    if has op; then
+      echo "OK: op -> $(command -v op)"
+      echo "Note: run 'op signin' manually to authenticate."
+    else
+      echo "MISSING: op (1Password CLI)" >&2
+    fi
+  fi
 
-### SECTION ########################################
-_echo "start and enable daemons"
-####################################################
+  if [[ "$INSTALL_KUBECTL" == "1" ]]; then
+    if has kubectl; then
+      echo "OK: kubectl -> $(command -v kubectl)"
+    else
+      echo "MISSING: kubectl" >&2
+    fi
+  fi
 
-systemctl start docker.service
-systemctl enable docker.service
+  if [[ "$INSTALL_RUST" == "1" ]]; then
+    if has cargo; then
+      echo "OK: cargo -> $(command -v cargo)"
+    else
+      echo "MISSING: cargo" >&2
+    fi
+  fi
 
-### SECTION ########################################
-_echo "setting up timezone and hostname"
-####################################################
+  if [[ "$INSTALL_GUI" == "1" ]]; then
+    if has alacritty; then
+      echo "OK: alacritty -> $(command -v alacritty)"
+    else
+      echo "Note: alacritty may be installed as a GUI app and not on PATH on macOS."
+    fi
+  fi
 
-timedatectl set-timezone America/New_York
-hostname "${HOSTNAME}"
-hostnamectl set-hostname "${HOSTNAME}"
-sed -i '/^127\.0\.0\.1\s/s/$/ '"$HOSTNAME"'/' /etc/hosts
-sed -i '/^127\.0\.0\.1\s/s/$/ '"$HOSTNAME"'/' /etc/cloud/templates/hosts.debian.tmpl
+  echo
+  echo "Next steps:"
+  echo "  1) Open a new terminal session (zsh)"
+  echo "  2) (Optional) Authenticate 1Password: op signin"
+  echo "  3) (Optional) Configure kubectl access (kubeconfig)"
+}
 
-### SECTION ########################################
-_echo "creating local user"
-####################################################
+main() {
+  _h "Bootstrapping terminal environment"
 
-adduser \
-    --uid "$FCE_UID" \
-        --disabled-password \
-        --gecos "" \
-        --shell "$(which zsh)" "${ME}"
+  if [[ $IS_DARWIN -eq 1 ]]; then
+    install_macos_packages
+  else
+    install_linux_packages
+  fi
 
-sudo usermod -aG docker ${ME}
+  install_rustup
+  setup_dotfiles
+  ensure_zsh_default_shell
+  post_checks
+}
 
-### SECTION #######################################
-_echo "setting up key keychain"
-###################################################
-
-get fce GH_TOKEN | ${ASME} gh auth login -p ssh --with-token
-mkdir -p ${MYHOME}/.ssh
-if [[ -d /home/admin/.ssh ]]; then
-	cp /home/${AZUSER}/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
-else
-	cp /root/.ssh/authorized_keys ${MYHOME}/.ssh/authorized_keys
-fi
-
-#get fce id_ed25519_github privateKey > ${MYHOME}/.ssh/id_ed25519
-op item get likvwv35ej47zccfq7qg2fftle --reveal --format json|jq '.fields[] | select(.id == "private_key") | .ssh_formats.openssh.value'
-get fce id_edd25519 "public key"> ${MYHOME}/.ssh/id_ed25519.pub
-ssh-keyscan -p 22 -H github.com gist.github.com > /root/.ssh/known_hosts
-${ASME} ssh-keyscan -p 22 -H github.com gist.github.com > ${MYHOME}/.ssh/known_hosts
-
-chown -R ${ME}:${ME} ${MYHOME}/.ssh
-chmod 700 ${MYHOME}/.ssh
-chmod 600 ${MYHOME}/.ssh/*
-
-### SECTION ########################################
-_echo "creating directory skeletons"
-####################################################
-
-$ASME mkdir -p \
-        $MYHOME/.{config,local} \
-        $MYHOME/.local/{bin,docs,cache,lib,share,src,state} \
-	$MYHOME/.local/state/zsh
-
-### SECTION ########################################
-_echo "setting up rust"
-####################################################
-
-curl https://sh.rustup.rs -sSf | $ASME CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" sh -s -- -y --default-toolchain stable --profile default &&
-        ${ASME} CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" $MYHOME/.local/lib/cargo/bin/cargo install cargo-quickinstall &&
-        ${ASME} CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" $MYHOME/.local/lib/cargo/bin/cargo quickinstall lolcat stylua
-
-### SECTION ########################################
-_echo "setting up starship"
-####################################################
-
-if [[ "$ARCH" == "arm" ]]; then
-        curl -sS https://starship.rs/install.sh | sh
-else
-        ${ASME} CARGO_HOME="$MYHOME/.local/lib/cargo" RUSTUP_HOME="$MYHOME/.local/lib/rustup" $MYHOME/.local/lib/cargo/bin/cargo quickinstall starship
-fi
-
-### SECTION ########################################
-_echo "granting root access"
-####################################################
-
-echo "${ME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${ME}"
-
-### SECTION ########################################
-_echo "setting up 1password"
-####################################################
-
-account fce "nnewbill@gmail.com"
-eval "$(op signin --account fce)"
-
-### SECTION ########################################
-_echo "setting up key keychain"
-####################################################
-
-get fce GH_TOKEN | ${ASME} gh auth login -p ssh --with-token
-
-### SECTION ########################################
-_echo "setting up dotfiles"
-####################################################
-
-${ASME} git clone https://github.com/ninewb/dotfiles.git $MYHOME/.local/src/dotfiles &&
-        cd $MYHOME/.local/src/dotfiles &&
-        ${ASME} stow bin git neovim tmux zsh -t $MYHOME
-
-echo 'export ZDOTDIR="$HOME"/.config/zsh' >> /etc/zsh/zshenv
-
-### SECTION ########################################
-_echo "tmux plugins"
-####################################################
-        
-$ASME mkdir -p ${MYHOME}/.config/tmux/plugins &&
-        ${ASME} git clone --depth=1 https://github.com/tmux-plugins/tpm ${MYHOME}/.config/tmux/plugins/tpm &&
-        ${ASME} ${MYHOME}/.config/tmux/plugins/tpm/scripts/install_plugins.sh &&
-        cd ${MYHOME}/.config/tmux/plugins/tmux-thumbs &&
-        expect -c "spawn ./tmux-thumbs-install.sh; send \"\r1\r\"; expect complete" 1> /dev/null
-
-### SECTION ########################################
-_echo "setting up ascii/ansi art tools"
-####################################################
-
-rm -rf /usr/share/figlet/
-git clone --depth=1 https://github.com/xero/figlet-fonts.git /usr/share/figlet/
-$ASME git clone --depth=1 https://github.com/digitallyserviced/tdfgo.git $MYHOME/.local/src/tdfgo &&
-	cd $MYHOME/.local/src/tdfgo &&
-	$ASME go build &&
-	mv ./tdfgo $MYHOME/.local/bin/tdfgo &&
-	chmod +x $MYHOME/.local/bin/tdfgo &&
-	mkdir -p $MYHOME/.config/tdfgo &&
-	mv ./fonts $MYHOME/.config/tdfgo/fonts
-
-### SECTION ########################################
-_echo "create workspace"
-####################################################
-
-mkdir -p /workspace
-chown -R ${ME}:${ME} /workspace
-chmod -R 775 /workspace
-
-### SECTION ########################################
-_echo "final user setup stuff"
-####################################################
-
-getfile fce config keys post > $MYHOME/post
-op signout --account fce --forget
-$ASME rm $MYHOME/.profile $MYHOME/.bash*
-mv $MYHOME/go $MYHOME/.local/lib/
-mv $MYHOME/.cache $MYHOME/cache
-mv $MYHOME/cache/* $MYHOME/cache
-rm -rf $MYHOME/.npm
-chmod +x $MYHOME/post
-chown -R $ME:$ME /home/$ME
-
+main "$@"

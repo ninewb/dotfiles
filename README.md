@@ -1,5 +1,12 @@
 # dotfiles
 
-## What are dotfiles?
+MacOS requirements - homebrew
 
-dotfiles are unix user configuration files.  Most specifically a collection of files and folders which configure the terminal and/or other applications wiht the look and feel that I desire. 
+
+- alacrity
+- neovim
+- tmux
+- 1pw
+- cargo
+- stow
+- zsh
