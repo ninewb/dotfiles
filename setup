@@ -65,10 +65,6 @@ case "$OS" in
 has() { command -v "$1" >/dev/null 2>&1; }
 need_cmd() { has "$1" || { echo "Missing required command: $1" >&2; return 1; }; }
 
-# Homebrew helpers (avoid noisy "already installed" warnings)
-# - If not installed: install
-# - If installed and outdated: upgrade
-# - If installed and up-to-date: skip
 brew_ensure_formula() {
   local pkg="$1"
   if ! brew list --formula "$pkg" >/dev/null 2>&1; then
@@ -108,9 +104,6 @@ brew_ensure_cask() {
   echo "brew: cask $cask already up-to-date"
 }
 
-# Homebrew / Linuxbrew in-path helper
-# - macOS: /opt/homebrew (Apple Silicon) or /usr/local (Intel)
-# - Linuxbrew: /home/linuxbrew/.linuxbrew
 ensure_brew_in_path() {
   if [[ $IS_DARWIN -eq 1 ]]; then
     if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -132,15 +125,12 @@ ensure_zsh_config() {
   local zdot="$HOME/.config/zsh"
   mkdir -p "$zdot"
 
-  # 1) Ensure ZDOTDIR is set early (zsh reads ~/.zshenv before anything else)
   local home_zshenv="$HOME/.zshenv"
   touch "$home_zshenv"
   if ! grep -q '^export ZDOTDIR=' "$home_zshenv"; then
     printf '\nexport ZDOTDIR="$HOME"/.config/zsh\n' >> "$home_zshenv"
   fi
 
-  # 2) Fix cargo env source path (rustup installs ~/.cargo/env by default)
-  #    Keep ZDOTDIR/.zshenv minimal: it runs for EVERY zsh (including non-interactive).
   local zdot_zshenv="$zdot/.zshenv"
   touch "$zdot_zshenv"
 
@@ -192,10 +182,6 @@ export PATH
 # <<< dotfiles PATH <<<
 EOF
 
-# 3) Ensure interactive shells get brew + cargo PATH via sourced *.zsh files
-#    Your ~/.config/zsh/.zshrc sources ~/.config/zsh/*.zsh; create those.
-  # 3a) Ensure PATH includes user bins and Homebrew (covers cases where brew shellenv isn't loaded yet)
-  #     This is sourced by ~/.config/zsh/.zshrc via the *.zsh loop.
   local path_zsh="$zdot/00-path.zsh"
   if [[ ! -f "$path_zsh" ]]; then
     cat > "$path_zsh" <<'EOF'
@@ -247,7 +233,6 @@ export PATH="$HOME/.cargo/bin:$PATH"
 EOF
   fi
 
-  # 3b) Ensure login shells load brew/linuxbrew environment
   local zprofile="$zdot/.zprofile"
   if [[ ! -f "$zprofile" ]]; then
     cat > "$zprofile" <<'EOF'
@@ -262,9 +247,6 @@ fi
 EOF
   fi
 
-  # 4) Ensure ~/.config/zsh/.zshrc safely sources ~/.config/zsh/*.zsh
-  #    - Avoid "no matches found" in zsh when no files match (use (N) nullglob)
-  #    - Fix accidental absolute path like '/.config/zsh/*.zsh'
   local zshrc="$zdot/.zshrc"
   local desired_zshrc
   desired_zshrc=$'for config in "$HOME"/.config/zsh/*.zsh(N); do\n  [[ -r "$config" ]] && source "$config"\ndone\n'
