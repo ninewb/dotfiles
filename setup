@@ -498,8 +498,18 @@ setup_dotfiles() {
   fi
 
   if [[ "$DO_STOW" == "1" ]]; then
-    _h "Stowing packages: $STOW_PACKAGES"
-    ( cd "$DOTFILES_DIR" && stow $STOW_PACKAGES -t "$HOME" )
+    _h "Stowing packages (skipping missing): $STOW_PACKAGES"
+
+    # Stow each package individually; skip if the package directory does not exist
+    local pkg
+    for pkg in $STOW_PACKAGES; do
+      if [[ -d "$DOTFILES_DIR/$pkg" ]]; then
+        echo "stow: $pkg"
+        ( cd "$DOTFILES_DIR" && stow "$pkg" -t "$HOME" )
+      else
+        echo "stow: skipping missing package '$pkg' (no directory at $DOTFILES_DIR/$pkg)" >&2
+      fi
+    done
   else
     echo "Skipping stow (DO_STOW=0)"
   fi
