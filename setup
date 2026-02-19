@@ -47,7 +47,7 @@ case "$OS" in
 # -------- Defaults --------
 : "${DOTFILES_REPO:=https://github.com/ninewb/dotfiles.git}"
 : "${DOTFILES_DIR:=$HOME/.local/src/dotfiles}"
-: "${STOW_PACKAGES:=bin git neovim tmux zsh}"
+: "${STOW_PACKAGES:=git neovim tmux zsh}"
 : "${DO_STOW:=1}"
 : "${INSTALL_GUI:=1}"
 : "${INSTALL_1PW:=1}"
@@ -57,6 +57,49 @@ case "$OS" in
 # -------- Helpers --------
 has() { command -v "$1" >/dev/null 2>&1; }
 need_cmd() { has "$1" || { echo "Missing required command: $1" >&2; return 1; }; }
+
+# Homebrew helpers (avoid noisy "already installed" warnings)
+# - If not installed: install
+# - If installed and outdated: upgrade
+# - If installed and up-to-date: skip
+brew_ensure_formula() {
+  local pkg="$1"
+  if ! brew list --formula "$pkg" >/dev/null 2>&1; then
+    echo "brew: install $pkg"
+    brew install "$pkg"
+    return 0
+  fi
+
+  if brew outdated --formula "$pkg" >/dev/null 2>&1; then
+    # brew outdated exits 0 when there are outdated formulae matching
+    if [[ -n "$(brew outdated --formula "$pkg")" ]]; then
+      echo "brew: upgrade $pkg"
+      brew upgrade "$pkg"
+      return 0
+    fi
+  fi
+
+  echo "brew: $pkg already up-to-date"
+}
+
+brew_ensure_cask() {
+  local cask="$1"
+  # casks are listed by token
+  if ! brew list --cask "$cask" >/dev/null 2>&1; then
+    echo "brew: install cask $cask"
+    brew install --cask "$cask"
+    return 0
+  fi
+
+  # For casks, `brew outdated --cask <name>` prints the name if outdated
+  if [[ -n "$(brew outdated --cask "$cask" 2>/dev/null || true)" ]]; then
+    echo "brew: upgrade cask $cask"
+    brew upgrade --cask "$cask"
+    return 0
+  fi
+
+  echo "brew: cask $cask already up-to-date"
+}
 
 # macOS brew path (Apple Silicon uses /opt/homebrew)
 ensure_brew_in_path() {
@@ -79,30 +122,48 @@ install_macos_packages() {
   fi
   ensure_brew_in_path
 
-  # CLI essentials
   brew update
-  brew install \
-    git \
-    stow \
-    neovim \
-    tmux \
-    zsh \
-    jq \
-    fzf \
-    python
+
+  # Install/upgrade formulae individually to avoid noisy "already installed" warnings
+  brew_ensure_formula git
+  brew_ensure_formula stow
+  brew_ensure_formula neovim
+  brew_ensure_formula tmux
+  brew_ensure_formula zsh
+  brew_ensure_formula jq
+  brew_ensure_formula fzf
+
+  # Homebrew's python token currently maps to a versioned formula (e.g., python@3.x)
+  # Ensuring "python" keeps it current.
+  brew_ensure_formula python
 
   if [[ "$INSTALL_1PW" == "1" ]]; then
-    brew install 1password-cli
+    brew_ensure_formula 1password-cli
   fi
 
   if [[ "$INSTALL_KUBECTL" == "1" ]]; then
-    brew install kubectl
+    brew_ensure_formula kubectl
   fi
 
   if [[ "$INSTALL_GUI" == "1" ]]; then
     # Install Alacritty into user Applications directory to avoid sudo
     mkdir -p "$HOME/Applications"
-    brew install --cask --appdir="$HOME/Applications" alacritty
+
+    # Ensure cask token exists/updates, then move app into user Applications
+    brew_ensure_cask alacritty
+
+    # If brew installed into /Applications (some policies), copy/move isn't possible without sudo.
+    # Using --appdir during install is the most reliable approach in managed environments.
+    if [[ -d "$HOME/Applications/Alacritty.app" ]]; then
+      :
+    elif [[ -d "$(brew --prefix)/Caskroom/alacritty" ]]; then
+      # Best-effort: if the app landed in the Caskroom, ensure it exists in ~/Applications.
+      local app_src
+      app_src="$(ls -1d "$(brew --prefix)"/Caskroom/alacritty/*/Alacritty.app 2>/dev/null | tail -n 1 || true)"
+      if [[ -n "$app_src" ]]; then
+        rsync -a "$app_src" "$HOME/Applications/" >/dev/null 2>&1 || true
+      fi
+    fi
   fi
 }
 
@@ -113,6 +174,9 @@ install_linux_packages() {
   need_cmd apt-get
 
   sudo apt-get update -y
+
+  # Keep existing packages current before installing new ones
+  sudo apt-get upgrade -y
   sudo apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
