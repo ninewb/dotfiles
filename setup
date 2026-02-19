@@ -9,6 +9,7 @@ set -euo pipefail
 #   - alacritty
 #   - neovim
 #   - tmux
+#   - tmux plugin manager (tpm)
 #   - 1password-cli (op)
 #   - kubectl
 #   - k9s
@@ -481,6 +482,35 @@ ensure_zsh_default_shell() {
   fi
 }
 
+ensure_tmux_tpm() {
+  _h "Ensuring tmux plugin manager (tpm)"
+
+  local tpm_dir="$HOME/.tmux/plugins/tpm"
+
+  # Ensure parent dir exists
+  mkdir -p "$(dirname "$tpm_dir")"
+
+  # Clone or update
+  if [[ -d "$tpm_dir/.git" ]]; then
+    echo "tpm already present: $tpm_dir"
+    ( cd "$tpm_dir" && git pull --ff-only ) || echo "Warning: unable to update tpm; continuing" >&2
+  else
+    echo "Installing tpm to: $tpm_dir"
+    git clone https://github.com/tmux-plugins/tpm "$tpm_dir"
+  fi
+
+  # Best-effort: if tmux is running, install plugins immediately; otherwise user can do it later.
+  if has tmux; then
+    if tmux list-sessions >/dev/null 2>&1; then
+      echo "tmux session detected; attempting to install plugins via tpm..."
+      "$tpm_dir/bin/install_plugins" || true
+      "$tpm_dir/bin/update_plugins" all || true
+    else
+      echo "No tmux session detected. After starting tmux, install plugins with: prefix + I"
+    fi
+  fi
+}
+
 # -------- Dotfiles clone + stow --------
 setup_dotfiles() {
   _h "Cloning dotfiles"
@@ -559,6 +589,13 @@ post_checks() {
     fi
   done
 
+  # TPM check
+  if [[ -x "$HOME/.tmux/plugins/tpm/tpm" ]]; then
+    echo "OK: tpm -> $HOME/.tmux/plugins/tpm/tpm"
+  else
+    echo "MISSING: tpm (tmux plugin manager)" >&2
+  fi
+
   if [[ "$INSTALL_1PW" == "1" ]]; then
     if has op; then
       echo "OK: op -> $(command -v op)"
@@ -615,6 +652,7 @@ main() {
 
   install_rustup
   setup_dotfiles
+  ensure_tmux_tpm
   ensure_zsh_config
   ensure_zsh_default_shell
   post_checks
