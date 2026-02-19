@@ -105,13 +105,19 @@ brew_ensure_cask() {
   echo "brew: cask $cask already up-to-date"
 }
 
-# macOS brew path (Apple Silicon uses /opt/homebrew)
+# Homebrew / Linuxbrew in-path helper
+# - macOS: /opt/homebrew (Apple Silicon) or /usr/local (Intel)
+# - Linuxbrew: /home/linuxbrew/.linuxbrew
 ensure_brew_in_path() {
   if [[ $IS_DARWIN -eq 1 ]]; then
     if [[ -x /opt/homebrew/bin/brew ]]; then
       eval "$(/opt/homebrew/bin/brew shellenv)"
     elif [[ -x /usr/local/bin/brew ]]; then
       eval "$(/usr/local/bin/brew shellenv)"
+    fi
+  elif [[ $IS_LINUX -eq 1 ]]; then
+    if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+      eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
     fi
   fi
 }
@@ -145,6 +151,44 @@ ensure_zsh_config() {
     printf '\n# rustup/cargo (installed by setup)\nif [[ -f "$HOME/.cargo/env" ]]; then\n  . "$HOME/.cargo/env"\nfi\n' >> "$zdot_zshenv"
   fi
 
+  # Ensure PATH basics are present for every zsh (including non-interactive shells)
+  # Keep this simple and idempotent.
+  local marker_begin="# >>> dotfiles PATH >>>"
+  local marker_end="# <<< dotfiles PATH <<<"
+
+  # Remove existing managed PATH block if present
+  perl -0777 -i -pe "s/\n?\Q${marker_begin}\E.*?\Q${marker_end}\E\n?/\n/sg" "$zdot_zshenv" 2>/dev/null || true
+
+  cat >> "$zdot_zshenv" <<'EOF'
+
+# >>> dotfiles PATH >>>
+# Base PATH hygiene (runs for every zsh)
+typeset -U path PATH
+
+# User bins first (stow targets ~/.local/bin)
+path=(
+  "$HOME/.local/bin"
+  "$HOME/bin"
+  "$HOME/.cargo/bin"
+  $path
+)
+
+# System bins
+path=(/usr/local/bin /usr/local/sbin $path)
+
+# Homebrew / Linuxbrew
+if [[ -d /opt/homebrew/bin ]]; then
+  path=(/opt/homebrew/bin /opt/homebrew/sbin $path)
+elif [[ -d /usr/local/bin ]]; then
+  :
+elif [[ -d /home/linuxbrew/.linuxbrew/bin ]]; then
+  path=(/home/linuxbrew/.linuxbrew/bin /home/linuxbrew/.linuxbrew/sbin $path)
+fi
+
+export PATH
+# <<< dotfiles PATH <<<
+EOF
+
 # 3) Ensure interactive shells get brew + cargo PATH via sourced *.zsh files
 #    Your ~/.config/zsh/.zshrc sources ~/.config/zsh/*.zsh; create those.
   # 3a) Ensure PATH includes user bins and Homebrew (covers cases where brew shellenv isn't loaded yet)
@@ -167,9 +211,11 @@ path=(
   $path
 )
 
-# Homebrew
+# Homebrew / Linuxbrew
 if [[ -d /opt/homebrew/bin ]]; then
   path=(/opt/homebrew/bin /opt/homebrew/sbin $path)
+elif [[ -d /home/linuxbrew/.linuxbrew/bin ]]; then
+  path=(/home/linuxbrew/.linuxbrew/bin /home/linuxbrew/.linuxbrew/sbin $path)
 elif [[ -d /usr/local/bin ]]; then
   path=(/usr/local/bin /usr/local/sbin $path)
 fi
@@ -195,6 +241,21 @@ EOF
     cat > "$cargo_zsh" <<'EOF'
 # Cargo PATH for interactive shells
 export PATH="$HOME/.cargo/bin:$PATH"
+EOF
+  fi
+
+  # 3b) Ensure login shells load brew/linuxbrew environment
+  local zprofile="$zdot/.zprofile"
+  if [[ ! -f "$zprofile" ]]; then
+    cat > "$zprofile" <<'EOF'
+# Login shell environment
+if [[ -x /opt/homebrew/bin/brew ]]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -x /usr/local/bin/brew ]]; then
+  eval "$(/usr/local/bin/brew shellenv)"
+elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+fi
 EOF
   fi
 
