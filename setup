@@ -10,6 +10,7 @@ set -euo pipefail
 #   - neovim
 #   - tmux
 #   - tmux plugin manager (tpm)
+#   - nerd fonts (for glyphs/icons in tmux and prompt)
 #   - 1password-cli (op)
 #   - kubectl
 #   - k9s
@@ -28,6 +29,7 @@ set -euo pipefail
 #   STOW_PACKAGES   (default: "bin git neovim tmux zsh")
 #   DO_STOW         (default: 1)  set to 0 to skip stow
 #   INSTALL_GUI     (default: 1)  set to 0 to skip GUI apps (e.g., Alacritty on mac)
+#   INSTALL_FONTS   (default: 1)  set to 0 to skip Nerd Fonts installation
 #   INSTALL_1PW      (default: 1) set to 0 to skip 1Password CLI
 #   INSTALL_KUBECTL  (default: 1) set to 0 to skip kubectl
 #   INSTALL_K9S      (default: 1) set to 0 to skip k9s
@@ -56,6 +58,7 @@ case "$OS" in
 : "${STOW_PACKAGES:=bin git neovim tmux zsh}"
 : "${DO_STOW:=1}"
 : "${INSTALL_GUI:=1}"
+: "${INSTALL_FONTS:=1}"
 : "${INSTALL_1PW:=1}"
 : "${INSTALL_KUBECTL:=1}"
 : "${INSTALL_K9S:=1}"
@@ -115,6 +118,58 @@ ensure_brew_in_path() {
   elif [[ $IS_LINUX -eq 1 ]]; then
     if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
       eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+    fi
+  fi
+}
+
+# -------- Nerd Fonts installation --------
+install_nerd_fonts() {
+  [[ "${INSTALL_FONTS:-1}" == "1" ]] || return 0
+
+  _h "Installing Nerd Fonts (glyphs/icons for tmux + prompt)"
+
+  if [[ $IS_DARWIN -eq 1 ]]; then
+    ensure_brew_in_path
+    if ! has brew; then
+      echo "Homebrew not found; cannot install fonts automatically." >&2
+      return 0
+    fi
+
+    brew tap homebrew/cask-fonts >/dev/null 2>&1 || true
+
+    # Widely compatible Nerd Font
+    brew_ensure_cask font-jetbrains-mono-nerd-font
+
+  elif [[ $IS_LINUX -eq 1 ]]; then
+    local font_name="JetBrainsMono"
+    local nf_version="3.2.1"
+    local url="https://github.com/ryanoasis/nerd-fonts/releases/download/v${nf_version}/${font_name}.zip"
+
+    need_cmd curl
+    need_cmd unzip
+
+    local font_dir="$HOME/.local/share/fonts"
+    mkdir -p "$font_dir"
+
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+
+    echo "Downloading Nerd Font: ${font_name} (v${nf_version})"
+    (
+      cd "$tmpdir"
+      curl -fsSLo "${font_name}.zip" "$url"
+      unzip -o "${font_name}.zip" -d "$tmpdir" >/dev/null
+
+      find "$tmpdir" -maxdepth 1 -type f \( -name '*.ttf' -o -name '*.otf' \) -print0 \
+        | xargs -0 -I{} cp -f "{}" "$font_dir/"
+    )
+
+    rm -rf "$tmpdir"
+
+    if has fc-cache; then
+      fc-cache -f "$font_dir" >/dev/null 2>&1 || true
+    else
+      echo "Note: fc-cache not found. Install fontconfig and run: fc-cache -f" >&2
     fi
   fi
 }
@@ -354,6 +409,8 @@ install_linux_packages() {
   sudo apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    unzip \
+    fontconfig \
     git \
     gnupg \
     jq \
@@ -596,6 +653,23 @@ post_checks() {
     echo "MISSING: tpm (tmux plugin manager)" >&2
   fi
 
+  # Nerd Fonts check (best-effort)
+  if has fc-list; then
+    if fc-list | grep -qi "JetBrainsMono Nerd Font"; then
+      echo "OK: Nerd Font detected (JetBrainsMono Nerd Font)"
+    else
+      echo "Note: Nerd Font not detected via fc-list. If icons look like boxes, set your terminal font to a Nerd Font." >&2
+    fi
+  else
+    if [[ $IS_DARWIN -eq 1 ]]; then
+      if ls "$HOME/Library/Fonts" 2>/dev/null | grep -qi "JetBrains"; then
+        echo "OK: Fonts present in ~/Library/Fonts (JetBrains)"
+      else
+        echo "Note: Unable to verify Nerd Font presence. If icons look like boxes, set your terminal font to a Nerd Font." >&2
+      fi
+    fi
+  fi
+
   if [[ "$INSTALL_1PW" == "1" ]]; then
     if has op; then
       echo "OK: op -> $(command -v op)"
@@ -651,6 +725,7 @@ main() {
   fi
 
   install_rustup
+  install_nerd_fonts
   setup_dotfiles
   ensure_tmux_tpm
   ensure_zsh_config
