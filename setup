@@ -11,6 +11,7 @@ set -euo pipefail
 #   - tmux
 #   - 1password-cli (op)
 #   - kubectl
+#   - k9s
 #   - cargo (rustup)
 #   - stow
 #   - zsh
@@ -27,6 +28,7 @@ set -euo pipefail
 #   INSTALL_GUI     (default: 1)  set to 0 to skip GUI apps (e.g., Alacritty on mac)
 #   INSTALL_1PW      (default: 1) set to 0 to skip 1Password CLI
 #   INSTALL_KUBECTL  (default: 1) set to 0 to skip kubectl
+#   INSTALL_K9S      (default: 1) set to 0 to skip k9s
 #   INSTALL_RUST     (default: 1) set to 0 to skip rustup/cargo
 # ============================================================================== 
 
@@ -48,11 +50,12 @@ case "$OS" in
 # -------- Defaults --------
 : "${DOTFILES_REPO:=https://github.com/ninewb/dotfiles.git}"
 : "${DOTFILES_DIR:=$HOME/.local/src/dotfiles}"
-: "${STOW_PACKAGES:=git neovim tmux zsh}"
+: "${STOW_PACKAGES:=bin git neovim tmux zsh}"
 : "${DO_STOW:=1}"
 : "${INSTALL_GUI:=1}"
 : "${INSTALL_1PW:=1}"
 : "${INSTALL_KUBECTL:=1}"
+: "${INSTALL_K9S:=1}"
 : "${INSTALL_RUST:=1}"
 
 # -------- Helpers --------
@@ -142,8 +145,39 @@ ensure_zsh_config() {
     printf '\n# rustup/cargo (installed by setup)\nif [[ -f "$HOME/.cargo/env" ]]; then\n  . "$HOME/.cargo/env"\nfi\n' >> "$zdot_zshenv"
   fi
 
-  # 3) Ensure interactive shells get brew + cargo PATH via sourced *.zsh files
-  #    Your ~/.config/zsh/.zshrc sources ~/.config/zsh/*.zsh; create those.
+# 3) Ensure interactive shells get brew + cargo PATH via sourced *.zsh files
+#    Your ~/.config/zsh/.zshrc sources ~/.config/zsh/*.zsh; create those.
+  # 3a) Ensure PATH includes user bins and Homebrew (covers cases where brew shellenv isn't loaded yet)
+  #     This is sourced by ~/.config/zsh/.zshrc via the *.zsh loop.
+  local path_zsh="$zdot/00-path.zsh"
+  if [[ ! -f "$path_zsh" ]]; then
+    cat > "$path_zsh" <<'EOF'
+# Base PATH hygiene for interactive shells
+# - Ensure user bins are present
+# - Prefer Homebrew paths on macOS (Apple Silicon vs Intel)
+# - De-duplicate entries
+
+typeset -U path PATH
+
+# User bins first (so your stowed scripts like `k8s` resolve)
+path=(
+  "$HOME/.local/bin"
+  "$HOME/bin"
+  "$HOME/.cargo/bin"
+  $path
+)
+
+# Homebrew
+if [[ -d /opt/homebrew/bin ]]; then
+  path=(/opt/homebrew/bin /opt/homebrew/sbin $path)
+elif [[ -d /usr/local/bin ]]; then
+  path=(/usr/local/bin /usr/local/sbin $path)
+fi
+
+export PATH
+EOF
+  fi
+
   local brew_zsh="$zdot/10-homebrew.zsh"
   if [[ ! -f "$brew_zsh" ]]; then
     cat > "$brew_zsh" <<'EOF'
@@ -164,19 +198,25 @@ export PATH="$HOME/.cargo/bin:$PATH"
 EOF
   fi
 
-  # 4) Fix ~/.config/zsh/.zshrc loop if it's using the invalid one-liner
+  # 4) Ensure ~/.config/zsh/.zshrc safely sources ~/.config/zsh/*.zsh
+  #    - Avoid "no matches found" in zsh when no files match (use (N) nullglob)
+  #    - Fix accidental absolute path like '/.config/zsh/*.zsh'
   local zshrc="$zdot/.zshrc"
+  local desired_zshrc
+  desired_zshrc=$'for config in "$HOME"/.config/zsh/*.zsh(N); do\n  [[ -r "$config" ]] && source "$config"\ndone\n'
+
   if [[ -f "$zshrc" ]]; then
-    if grep -q '^for config (~/\.config/zsh/\*\.zsh) source \$config' "$zshrc"; then
-      perl -0777 -i -pe 's/^for config \(~\/\.config\/zsh\/\*\.zsh\) source \$config\n?/for config in "$HOME"\/\.config\/zsh\/\*.zsh; do\n  [[ -r "$config" ]] && source "$config"\ndone\n/m' "$zshrc" || true
+    # If the file contains the old one-liner OR an incorrect absolute path, replace it.
+    if grep -qE '^for[[:space:]]+config[[:space:]]*\(|/\.config/zsh/\*\.zsh' "$zshrc"; then
+      printf '%s' "$desired_zshrc" > "$zshrc"
+    else
+      # If it doesn't already contain a *.zsh sourcing loop, append a managed loop.
+      if ! grep -qE '\.config/zsh/\*\.zsh' "$zshrc"; then
+        printf '\n%s' "$desired_zshrc" >> "$zshrc"
+      fi
     fi
   else
-    # If it doesn't exist, create a sane default
-    cat > "$zshrc" <<'EOF'
-for config in "$HOME"/.config/zsh/*.zsh; do
-  [[ -r "$config" ]] && source "$config"
-done
-EOF
+    printf '%s' "$desired_zshrc" > "$zshrc"
   fi
 }
 
@@ -184,11 +224,23 @@ EOF
 install_macos_packages() {
   _h "macOS: installing packages (Homebrew)"
 
+  # If brew exists but isn't on PATH yet, load it first.
+  ensure_brew_in_path
+
+  if ! has brew; then
+    echo "Homebrew not found in PATH. Checking standard locations..."
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
+  fi
+
   if ! has brew; then
     echo "Homebrew not found. Installing..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    ensure_brew_in_path
   fi
-  ensure_brew_in_path
 
   brew update
 
@@ -211,6 +263,10 @@ install_macos_packages() {
 
   if [[ "$INSTALL_KUBECTL" == "1" ]]; then
     brew_ensure_formula kubectl
+  fi
+
+  if [[ "$INSTALL_K9S" == "1" ]]; then
+    brew_ensure_formula k9s
   fi
 
   if [[ "$INSTALL_GUI" == "1" ]]; then
@@ -258,7 +314,31 @@ install_linux_packages() {
     zsh \
     fzf \
     python3 \
-    python3-pip
+    python3-pip \
+    k9s
+
+  if [[ "$INSTALL_K9S" == "1" ]]; then
+    if ! has k9s; then
+      _h "Linux: installing k9s (fallback binary)"
+      # Install latest k9s release binary (best-effort)
+      local k9s_os="Linux"
+      local k9s_arch="amd64"
+      case "$(uname -m)" in
+        x86_64|amd64) k9s_arch="amd64" ;;
+        aarch64|arm64) k9s_arch="arm64" ;;
+      esac
+
+      local tmpdir
+      tmpdir="$(mktemp -d)"
+      (
+        cd "$tmpdir"
+        curl -fsSLO "https://github.com/derailed/k9s/releases/latest/download/k9s_${k9s_os}_${k9s_arch}.tar.gz"
+        tar -xzf "k9s_${k9s_os}_${k9s_arch}.tar.gz"
+        sudo install -m 0755 k9s /usr/local/bin/k9s
+      )
+      rm -rf "$tmpdir"
+    fi
+  fi
 
   # Alacritty availability varies by distro; try apt first.
   if [[ "$INSTALL_GUI" == "1" ]]; then
@@ -384,7 +464,12 @@ post_checks() {
 
   echo "OS: $OS ($ARCH)"
 
-  for c in git stow nvim tmux zsh python3 pip3; do
+  echo "PATH: $PATH"
+  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    echo "Note: $HOME/.local/bin is not on PATH (your stowed bin scripts may not resolve)." >&2
+  fi
+
+  for c in git stow nvim tmux zsh python3 pip3 kubectl k9s; do
     if has "$c"; then
       echo "OK: $c -> $(command -v "$c")"
     else
