@@ -15,6 +15,7 @@ set -euo pipefail
 #   - cargo (rustup)
 #   - stow
 #   - zsh
+#   - starship (prompt)
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ninewb/dotfiles/main/setup | bash
@@ -30,6 +31,7 @@ set -euo pipefail
 #   INSTALL_KUBECTL  (default: 1) set to 0 to skip kubectl
 #   INSTALL_K9S      (default: 1) set to 0 to skip k9s
 #   INSTALL_RUST     (default: 1) set to 0 to skip rustup/cargo
+#   INSTALL_STARSHIP (default: 1) set to 0 to skip starship
 # ============================================================================== 
 
 # -------- Pretty output --------
@@ -57,6 +59,7 @@ case "$OS" in
 : "${INSTALL_KUBECTL:=1}"
 : "${INSTALL_K9S:=1}"
 : "${INSTALL_RUST:=1}"
+: "${INSTALL_STARSHIP:=1}"
 
 # -------- Helpers --------
 has() { command -v "$1" >/dev/null 2>&1; }
@@ -313,6 +316,9 @@ install_macos_packages() {
   brew_ensure_formula zsh
   brew_ensure_formula jq
   brew_ensure_formula fzf
+  if [[ "$INSTALL_STARSHIP" == "1" ]]; then
+    brew_ensure_formula starship
+  fi
 
   # Homebrew's python token currently maps to a versioned formula (e.g., python@3.x)
   # Ensuring "python" keeps it current.
@@ -376,7 +382,15 @@ install_linux_packages() {
     fzf \
     python3 \
     python3-pip \
-    k9s
+    k9s \
+    starship
+
+  if [[ "$INSTALL_STARSHIP" == "1" ]]; then
+    if ! has starship; then
+      _h "Linux: installing starship (fallback script)"
+      curl -fsSL https://starship.rs/install.sh | sh -s -- -y
+    fi
+  fi
 
   if [[ "$INSTALL_K9S" == "1" ]]; then
     if ! has k9s; then
@@ -540,7 +554,7 @@ post_checks() {
     echo "Note: $HOME/.local/bin is not on PATH (your stowed bin scripts may not resolve)." >&2
   fi
 
-  for c in git stow nvim tmux zsh python3 pip3 kubectl k9s; do
+  for c in git stow nvim tmux zsh python3 pip3 kubectl k9s starship; do
     if has "$c"; then
       echo "OK: $c -> $(command -v "$c")"
     else
@@ -590,6 +604,7 @@ post_checks() {
   echo "  1) Open a new terminal session (zsh)"
   echo "  2) (Optional) Authenticate 1Password: op signin"
   echo "  3) (Optional) Configure kubectl access (kubeconfig)"
+  echo "  4) Enable starship in zsh (add eval \"\$(starship init zsh)\" to your prompt config)"
 }
 
 main() {
