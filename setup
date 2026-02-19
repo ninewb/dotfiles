@@ -17,6 +17,7 @@ set -euo pipefail
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ninewb/dotfiles/main/setup | bash
+#   curl -fsSL "https://raw.githubusercontent.com/ninewb/dotfiles/main/setup?cachebust=$(date +%s)" | bash
 #
 # Optional env vars:
 #   DOTFILES_REPO   (default: https://github.com/ninewb/dotfiles.git)
@@ -109,6 +110,73 @@ ensure_brew_in_path() {
     elif [[ -x /usr/local/bin/brew ]]; then
       eval "$(/usr/local/bin/brew shellenv)"
     fi
+  fi
+}
+
+# -------- Zsh environment persistence (brew + cargo + sane config) --------
+ensure_zsh_config() {
+  _h "Configuring zsh environment (persist PATH, brew, cargo)"
+
+  local zdot="$HOME/.config/zsh"
+  mkdir -p "$zdot"
+
+  # 1) Ensure ZDOTDIR is set early (zsh reads ~/.zshenv before anything else)
+  local home_zshenv="$HOME/.zshenv"
+  touch "$home_zshenv"
+  if ! grep -q '^export ZDOTDIR=' "$home_zshenv"; then
+    printf '\nexport ZDOTDIR="$HOME"/.config/zsh\n' >> "$home_zshenv"
+  fi
+
+  # 2) Fix cargo env source path (rustup installs ~/.cargo/env by default)
+  #    Keep ZDOTDIR/.zshenv minimal: it runs for EVERY zsh (including non-interactive).
+  local zdot_zshenv="$zdot/.zshenv"
+  touch "$zdot_zshenv"
+
+  # Remove old/bad cargo env source if present
+  if grep -q '"\$HOME/\.local/lib/cargo/env"' "$zdot_zshenv" 2>/dev/null; then
+    perl -0777 -i -pe 's/^.*\"\$HOME\/.local\/lib\/cargo\/env\".*\n//mg' "$zdot_zshenv" || true
+  fi
+
+  # Ensure rustup cargo env is sourced if available
+  if ! grep -q '^\.[[:space:]]\+"\$HOME/\.cargo/env"' "$zdot_zshenv" 2>/dev/null; then
+    printf '\n# rustup/cargo (installed by setup)\nif [[ -f "$HOME/.cargo/env" ]]; then\n  . "$HOME/.cargo/env"\nfi\n' >> "$zdot_zshenv"
+  fi
+
+  # 3) Ensure interactive shells get brew + cargo PATH via sourced *.zsh files
+  #    Your ~/.config/zsh/.zshrc sources ~/.config/zsh/*.zsh; create those.
+  local brew_zsh="$zdot/10-homebrew.zsh"
+  if [[ ! -f "$brew_zsh" ]]; then
+    cat > "$brew_zsh" <<'EOF'
+# Homebrew PATH for interactive shells
+if [[ -x /opt/homebrew/bin/brew ]]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -x /usr/local/bin/brew ]]; then
+  eval "$(/usr/local/bin/brew shellenv)"
+fi
+EOF
+  fi
+
+  local cargo_zsh="$zdot/20-cargo.zsh"
+  if [[ ! -f "$cargo_zsh" ]]; then
+    cat > "$cargo_zsh" <<'EOF'
+# Cargo PATH for interactive shells
+export PATH="$HOME/.cargo/bin:$PATH"
+EOF
+  fi
+
+  # 4) Fix ~/.config/zsh/.zshrc loop if it's using the invalid one-liner
+  local zshrc="$zdot/.zshrc"
+  if [[ -f "$zshrc" ]]; then
+    if grep -q '^for config (~/\.config/zsh/\*\.zsh) source \$config' "$zshrc"; then
+      perl -0777 -i -pe 's/^for config \(~\/\.config\/zsh\/\*\.zsh\) source \$config\n?/for config in "$HOME"\/\.config\/zsh\/\*.zsh; do\n  [[ -r "$config" ]] && source "$config"\ndone\n/m' "$zshrc" || true
+    fi
+  else
+    # If it doesn't exist, create a sane default
+    cat > "$zshrc" <<'EOF'
+for config in "$HOME"/.config/zsh/*.zsh; do
+  [[ -r "$config" ]] && source "$config"
+done
+EOF
   fi
 }
 
@@ -379,6 +447,7 @@ main() {
 
   install_rustup
   setup_dotfiles
+  ensure_zsh_config
   ensure_zsh_default_shell
   post_checks
 }
