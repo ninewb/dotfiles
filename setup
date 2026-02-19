@@ -100,8 +100,9 @@ install_macos_packages() {
   fi
 
   if [[ "$INSTALL_GUI" == "1" ]]; then
-    # GUI apps are installed via casks
-    brew install --cask alacritty
+    # Install Alacritty into user Applications directory to avoid sudo
+    mkdir -p "$HOME/Applications"
+    brew install --cask --appdir="$HOME/Applications" alacritty
   fi
 }
 
@@ -287,8 +288,12 @@ post_checks() {
   if [[ "$INSTALL_GUI" == "1" ]]; then
     if has alacritty; then
       echo "OK: alacritty -> $(command -v alacritty)"
+    elif [[ -d "$HOME/Applications/Alacritty.app" ]]; then
+      echo "OK: Alacritty.app found in $HOME/Applications"
+    elif [[ -d "/Applications/Alacritty.app" ]]; then
+      echo "OK: Alacritty.app found in /Applications"
     else
-      echo "Note: alacritty may be installed as a GUI app and not on PATH on macOS."
+      echo "MISSING: alacritty" >&2
     fi
   fi
 
