@@ -9,6 +9,12 @@
 	unstage = reset HEAD --
 	d = difftool
 	c = clone
+	lg = log --oneline --decorate --graph --all
+	st = status -sb
+	br = branch
+	co = checkout
+	cm = commit
+	amend = commit --amend --no-edit
 [color]
 	ui = auto
 [diff]
@@ -17,9 +23,33 @@
 	cmd = "nvim --cmd \":lua vim.g.noplugins=1\" -d \"$LOCAL\" \"$REMOTE\""
 [difftool]
 	prompt = false
-[gpg]
-	program = gpg
 [core]
      attributesFile = ~/.config/git/gitattributes
-[commit]
-	gpgsign = false
+     editor = nvim
+[pull]
+	rebase = true
+
+[rebase]
+	autoStash = true
+
+[fetch]
+	prune = true
+
+[init]
+	defaultBranch = main
+
+[merge]
+	conflictStyle = zdiff3
+
+[diff]
+	colorMoved = default
+
+[push]
+	default = current
+	autoSetupRemote = true
+
+[rerere]
+	enabled = true
+
+[branch]
+	sort = -committerdate

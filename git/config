@@ -1,11 +1,9 @@
 [user]
 	name = fce
 	email = x@ferociouschipeater.com
-	signingkey = 2FA16D0B3140DE75
 [credential]
 	helper = cache
 [alias]
-	graphgpg = log --graph --color --pretty=format:"%C(yellow)%H%C(green)%d%C(reset)%n%x20%cd%n%x20%cn%C(blue)%x20(%ce)%x20%C(cyan)[gpg:%GK%x20%G?]%C(reset)%n%x20%s%n"
 	graph = log --graph --color --pretty=format:"%C(yellow)%H%C(green)%d%C(reset)%n%x20%cd%n%x20%cn%C(blue)%x20(%ce)%x20%C(cyan)%C(reset)%n%x20%s%n"
 	unstage = reset HEAD --
 	d = difftool
@@ -18,9 +16,5 @@
 	cmd = "nvim --cmd \":lua vim.g.noplugins=1\" -d \"$LOCAL\" \"$REMOTE\""
 [difftool]
 	prompt = false
-[gpg]
-	program = gpg
 [core]
      attributesFile = ~/.config/git/gitattributes
-[commit]
-	gpgsign = true
