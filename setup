@@ -118,151 +118,20 @@ ensure_brew_in_path() {
   fi
 }
 
-# -------- Zsh environment persistence (brew + cargo + sane config) --------
+# -------- Zsh environment persistence (minimal; stow owns ~/.config/zsh) --------
 ensure_zsh_config() {
-  _h "Configuring zsh environment (persist PATH, brew, cargo)"
+  _h "Configuring zsh environment (ZDOTDIR only; repo-managed configs)"
 
-  local zdot="$HOME/.config/zsh"
-  mkdir -p "$zdot"
+  # Your repo manages everything under ~/.config/zsh via stow.
+  # The only thing this bootstrap should do is ensure zsh knows to use that directory.
+  mkdir -p "$HOME/.config/zsh"
 
   local home_zshenv="$HOME/.zshenv"
   touch "$home_zshenv"
+
+  # Ensure ZDOTDIR is set early (zsh reads ~/.zshenv before anything else)
   if ! grep -q '^export ZDOTDIR=' "$home_zshenv"; then
     printf '\nexport ZDOTDIR="$HOME"/.config/zsh\n' >> "$home_zshenv"
-  fi
-
-  local zdot_zshenv="$zdot/.zshenv"
-  touch "$zdot_zshenv"
-
-  # Remove old/bad cargo env source if present
-  if grep -q '"\$HOME/\.local/lib/cargo/env"' "$zdot_zshenv" 2>/dev/null; then
-    perl -0777 -i -pe 's/^.*\"\$HOME\/.local\/lib\/cargo\/env\".*\n//mg' "$zdot_zshenv" || true
-  fi
-
-  # Ensure rustup cargo env is sourced if available
-  if ! grep -q '^\.[[:space:]]\+"\$HOME/\.cargo/env"' "$zdot_zshenv" 2>/dev/null; then
-    printf '\n# rustup/cargo (installed by setup)\nif [[ -f "$HOME/.cargo/env" ]]; then\n  . "$HOME/.cargo/env"\nfi\n' >> "$zdot_zshenv"
-  fi
-
-  # Ensure PATH basics are present for every zsh (including non-interactive shells)
-  # Keep this simple and idempotent.
-  local marker_begin="# >>> dotfiles PATH >>>"
-  local marker_end="# <<< dotfiles PATH <<<"
-
-  # Remove existing managed PATH block if present
-  perl -0777 -i -pe "s/\n?\Q${marker_begin}\E.*?\Q${marker_end}\E\n?/\n/sg" "$zdot_zshenv" 2>/dev/null || true
-
-  cat >> "$zdot_zshenv" <<'EOF'
-
-# >>> dotfiles PATH >>>
-# Base PATH hygiene (runs for every zsh)
-typeset -U path PATH
-
-# User bins first (stow targets ~/.local/bin)
-path=(
-  "$HOME/.local/bin"
-  "$HOME/bin"
-  "$HOME/.cargo/bin"
-  $path
-)
-
-# System bins
-path=(/usr/local/bin /usr/local/sbin $path)
-
-# Homebrew / Linuxbrew
-if [[ -d /opt/homebrew/bin ]]; then
-  path=(/opt/homebrew/bin /opt/homebrew/sbin $path)
-elif [[ -d /usr/local/bin ]]; then
-  :
-elif [[ -d /home/linuxbrew/.linuxbrew/bin ]]; then
-  path=(/home/linuxbrew/.linuxbrew/bin /home/linuxbrew/.linuxbrew/sbin $path)
-fi
-
-export PATH
-# <<< dotfiles PATH <<<
-EOF
-
-  local path_zsh="$zdot/00-path.zsh"
-  if [[ ! -f "$path_zsh" ]]; then
-    cat > "$path_zsh" <<'EOF'
-# Base PATH hygiene for interactive shells
-# - Ensure user bins are present
-# - Prefer Homebrew paths on macOS (Apple Silicon vs Intel)
-# - De-duplicate entries
-
-typeset -U path PATH
-
-# User bins first (so your stowed scripts like `k8s` resolve)
-path=(
-  "$HOME/.local/bin"
-  "$HOME/bin"
-  "$HOME/.cargo/bin"
-  $path
-)
-
-# Homebrew / Linuxbrew
-if [[ -d /opt/homebrew/bin ]]; then
-  path=(/opt/homebrew/bin /opt/homebrew/sbin $path)
-elif [[ -d /home/linuxbrew/.linuxbrew/bin ]]; then
-  path=(/home/linuxbrew/.linuxbrew/bin /home/linuxbrew/.linuxbrew/sbin $path)
-elif [[ -d /usr/local/bin ]]; then
-  path=(/usr/local/bin /usr/local/sbin $path)
-fi
-
-export PATH
-EOF
-  fi
-
-  local brew_zsh="$zdot/10-homebrew.zsh"
-  if [[ ! -f "$brew_zsh" ]]; then
-    cat > "$brew_zsh" <<'EOF'
-# Homebrew PATH for interactive shells
-if [[ -x /opt/homebrew/bin/brew ]]; then
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-elif [[ -x /usr/local/bin/brew ]]; then
-  eval "$(/usr/local/bin/brew shellenv)"
-fi
-EOF
-  fi
-
-  local cargo_zsh="$zdot/20-cargo.zsh"
-  if [[ ! -f "$cargo_zsh" ]]; then
-    cat > "$cargo_zsh" <<'EOF'
-# Cargo PATH for interactive shells
-export PATH="$HOME/.cargo/bin:$PATH"
-EOF
-  fi
-
-  local zprofile="$zdot/.zprofile"
-  if [[ ! -f "$zprofile" ]]; then
-    cat > "$zprofile" <<'EOF'
-# Login shell environment
-if [[ -x /opt/homebrew/bin/brew ]]; then
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-elif [[ -x /usr/local/bin/brew ]]; then
-  eval "$(/usr/local/bin/brew shellenv)"
-elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
-  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-fi
-EOF
-  fi
-
-  local zshrc="$zdot/.zshrc"
-  local desired_zshrc
-  desired_zshrc=$'for config in "$HOME"/.config/zsh/*.zsh(N); do\n  [[ -r "$config" ]] && source "$config"\ndone\n'
-
-  if [[ -f "$zshrc" ]]; then
-    # If the file contains the old one-liner OR an incorrect absolute path, replace it.
-    if grep -qE '^for[[:space:]]+config[[:space:]]*\(|/\.config/zsh/\*\.zsh' "$zshrc"; then
-      printf '%s' "$desired_zshrc" > "$zshrc"
-    else
-      # If it doesn't already contain a *.zsh sourcing loop, append a managed loop.
-      if ! grep -qE '\.config/zsh/\*\.zsh' "$zshrc"; then
-        printf '\n%s' "$desired_zshrc" >> "$zshrc"
-      fi
-    fi
-  else
-    printf '%s' "$desired_zshrc" > "$zshrc"
   fi
 }
 
@@ -501,7 +370,7 @@ setup_dotfiles() {
     for pkg in $STOW_PACKAGES; do
       if [[ -d "$DOTFILES_DIR/$pkg" ]]; then
         echo "stow: $pkg"
-        ( cd "$DOTFILES_DIR" && stow "$pkg" -t "$HOME" )
+        ( cd "$DOTFILES_DIR" && stow "$pkg" -t "$HOME" ) || echo "stow: package '$pkg' had conflicts; skipping" >&2
       else
         echo "stow: skipping missing package '$pkg' (no directory at $DOTFILES_DIR/$pkg)" >&2
       fi
