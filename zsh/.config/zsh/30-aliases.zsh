@@ -9,6 +9,25 @@ alias ..='cd ..'
 alias ...='cd ../..'
 alias cls='clear'
 
+# Neovim
+alias vi='nvim'
+alias vim='nvim'
+
+# Edit config
+alias ec='nvim ~/.config'
+
+# Smart edit function:
+# - `e` with no args → open current directory
+# - `e <dir>`        → open directory (netrw)
+# - `e <file>`       → open file
+function e() {
+  if [[ $# -eq 0 ]]; then
+    nvim .
+  else
+    nvim "$@"
+  fi
+}
+
 # ------------------------------------------------------------------------------
 # Git
 # ------------------------------------------------------------------------------
