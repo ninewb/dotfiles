@@ -6,7 +6,7 @@ set -euo pipefail
 # Dotfiles bootstrap (Linux + macOS)
 #
 # Goals (minimal, fast, and reproducible):
-#   - alacritty
+#   - kitty
 #   - neovim
 #   - tmux
 #   - tmux plugin manager (tpm)
@@ -28,7 +28,7 @@ set -euo pipefail
 #   DOTFILES_DIR    (default: $HOME/.local/src/dotfiles)
 #   STOW_PACKAGES   (default: "bin git neovim tmux zsh")
 #   DO_STOW         (default: 1)  set to 0 to skip stow
-#   INSTALL_GUI     (default: 1)  set to 0 to skip GUI apps (e.g., Alacritty on mac)
+#   INSTALL_GUI     (default: 1)  set to 0 to skip GUI apps (e.g., Kitty on mac)
 #   INSTALL_FONTS   (default: 1)  set to 0 to skip Nerd Fonts installation
 #   INSTALL_1PW      (default: 1) set to 0 to skip 1Password CLI
 #   INSTALL_KUBECTL  (default: 1) set to 0 to skip kubectl
@@ -375,21 +375,19 @@ install_macos_packages() {
   fi
 
   if [[ "$INSTALL_GUI" == "1" ]]; then
-    # Install Alacritty into user Applications directory to avoid sudo
-    mkdir -p "$HOME/Applications"
+    # Install Kitty (terminal emulator)
+    brew_ensure_cask kitty
 
-    # Ensure cask token exists/updates, then move app into user Applications
-    brew_ensure_cask alacritty
-
-    # If brew installed into /Applications (some policies), copy/move isn't possible without sudo.
-    # Using --appdir during install is the most reliable approach in managed environments.
-    if [[ -d "$HOME/Applications/Alacritty.app" ]]; then
+    # Best-effort: ensure app exists in standard macOS locations
+    if [[ -d "$HOME/Applications/Kitty.app" ]]; then
       :
-    elif [[ -d "$(brew --prefix)/Caskroom/alacritty" ]]; then
-      # Best-effort: if the app landed in the Caskroom, ensure it exists in ~/Applications.
+    elif [[ -d "/Applications/Kitty.app" ]]; then
+      :
+    elif [[ -d "$(brew --prefix)/Caskroom/kitty" ]]; then
       local app_src
-      app_src="$(ls -1d "$(brew --prefix)"/Caskroom/alacritty/*/Alacritty.app 2>/dev/null | tail -n 1 || true)"
+      app_src="$(ls -1d "$(brew --prefix)"/Caskroom/kitty/*/Kitty.app 2>/dev/null | tail -n 1 || true)"
       if [[ -n "$app_src" ]]; then
+        mkdir -p "$HOME/Applications"
         rsync -a "$app_src" "$HOME/Applications/" >/dev/null 2>&1 || true
       fi
     fi
@@ -455,10 +453,10 @@ install_linux_packages() {
     fi
   fi
 
-  # Alacritty availability varies by distro; try apt first.
+  # Kitty availability varies by distro; try apt first.
   if [[ "$INSTALL_GUI" == "1" ]]; then
-    if ! dpkg -s alacritty >/dev/null 2>&1; then
-      sudo apt-get install -y alacritty || true
+    if ! dpkg -s kitty >/dev/null 2>&1; then
+      sudo apt-get install -y kitty || true
     fi
   fi
 
@@ -696,14 +694,14 @@ post_checks() {
   fi
 
   if [[ "$INSTALL_GUI" == "1" ]]; then
-    if has alacritty; then
-      echo "OK: alacritty -> $(command -v alacritty)"
-    elif [[ -d "$HOME/Applications/Alacritty.app" ]]; then
-      echo "OK: Alacritty.app found in $HOME/Applications"
-    elif [[ -d "/Applications/Alacritty.app" ]]; then
-      echo "OK: Alacritty.app found in /Applications"
+    if has kitty; then
+      echo "OK: kitty -> $(command -v kitty)"
+    elif [[ -d "$HOME/Applications/Kitty.app" ]]; then
+      echo "OK: Kitty.app found in $HOME/Applications"
+    elif [[ -d "/Applications/Kitty.app" ]]; then
+      echo "OK: Kitty.app found in /Applications"
     else
-      echo "MISSING: alacritty" >&2
+      echo "MISSING: kitty" >&2
     fi
   fi
 
