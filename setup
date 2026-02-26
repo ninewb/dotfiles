@@ -5,7 +5,7 @@ set -euo pipefail
 # ==============================================================================
 # Dotfiles bootstrap (Linux + macOS)
 #
-# Goals (minimal, fast, and reproducible):
+# Facts:
 #   - kitty
 #   - neovim
 #   - tmux
@@ -22,20 +22,11 @@ set -euo pipefail
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ninewb/dotfiles/main/setup | bash
 #   curl -fsSL "https://raw.githubusercontent.com/ninewb/dotfiles/main/setup?cachebust=$(date +%s)" | bash
+#   ./setup --apt-upgrade true
+#   ./setup --install-gui false
+#   ./setup --install-claude true
+#   ./setup --stow-packages "bin git neovim tmux zsh"
 #
-# Optional env vars:
-#   DOTFILES_REPO   (default: https://github.com/ninewb/dotfiles.git)
-#   DOTFILES_DIR    (default: $HOME/.local/src/dotfiles)
-#   STOW_PACKAGES   (default: "bin git neovim tmux zsh")
-#   DO_STOW         (default: 1)  set to 0 to skip stow
-#   INSTALL_CLAUDE   (default: 1)  set to 0 to skip Claude install
-#   INSTALL_GUI     (default: 1)  set to 0 to skip GUI apps (e.g., Kitty on mac)
-#   INSTALL_FONTS   (default: 1)  set to 0 to skip Nerd Fonts installation
-#   INSTALL_1PW      (default: 1) set to 0 to skip 1Password CLI
-#   INSTALL_KUBECTL  (default: 1) set to 0 to skip kubectl
-#   INSTALL_K9S      (default: 1) set to 0 to skip k9s
-#   INSTALL_RUST     (default: 1) set to 0 to skip rustup/cargo
-#   INSTALL_STARSHIP (default: 1) set to 0 to skip starship
 # ============================================================================== 
 
 # -------- Pretty output --------
@@ -58,6 +49,7 @@ case "$OS" in
 : "${DOTFILES_DIR:=$HOME/.local/src/dotfiles}"
 : "${STOW_PACKAGES:=bin git neovim tmux zsh}"
 : "${DO_STOW:=1}"
+: "${DO_APT_UPGRADE:=0}"
 : "${INSTALL_GUI:=1}"
 : "${INSTALL_CLAUDE:=1}"
 : "${INSTALL_FONTS:=1}"
@@ -66,6 +58,148 @@ case "$OS" in
 : "${INSTALL_K9S:=1}"
 : "${INSTALL_RUST:=1}"
 : "${INSTALL_STARSHIP:=1}"
+
+# -------- CLI argument parsing --------
+print_help() {
+  cat <<'EOF'
+Dotfiles setup
+
+Usage:
+  ./setup [options]
+
+Options:
+  --dotfiles-repo <url>
+  --dotfiles-dir <path>
+  --stow-packages "..."
+  --stow <true|false>
+  --apt-upgrade <true|false>
+  --install-gui <true|false>
+  --install-fonts <true|false>
+  --install-1pw <true|false>
+  --install-kubectl <true|false>
+  --install-k9s <true|false>
+  --install-rust <true|false>
+  --install-starship <true|false>
+  --install-claude <true|false>
+  --help
+
+Environment variables (optional):
+  DOTFILES_REPO        (default: https://github.com/ninewb/dotfiles.git)
+  DOTFILES_DIR         (default: $HOME/.local/src/dotfiles)
+  STOW_PACKAGES        (default: "bin git neovim tmux zsh")
+  DO_STOW              (default: 1)  set to 0 to skip stow
+  DO_APT_UPGRADE        (default: 0)  set to 1 to run apt-get upgrade during bootstrap
+  INSTALL_GUI          (default: 1)  set to 0 to skip GUI apps (e.g., Kitty on mac)
+  INSTALL_FONTS        (default: 1)  set to 0 to skip Nerd Fonts installation
+  INSTALL_1PW          (default: 1)  set to 0 to skip 1Password CLI
+  INSTALL_KUBECTL      (default: 1)  set to 0 to skip kubectl
+  INSTALL_K9S          (default: 1)  set to 0 to skip k9s
+  INSTALL_RUST         (default: 1)  set to 0 to skip rustup/cargo
+  INSTALL_STARSHIP     (default: 1)  set to 0 to skip starship
+  INSTALL_CLAUDE        (default: 1)  set to 0 to skip Claude install
+
+Examples:
+  DO_APT_UPGRADE=1 ./setup
+  INSTALL_GUI=0 ./setup
+  ./setup --apt-upgrade true --install-gui false
+
+Notes:
+  - CLI switches override defaults and environment variables (if both are used).
+  - Boolean values accept: true/false, 1/0, yes/no, on/off.
+EOF
+}
+
+_normalize_bool() {
+  local v="${1:-}"
+  v="${v,,}"
+  case "$v" in
+    1|true|yes|y|on) echo "1" ;;
+    0|false|no|n|off) echo "0" ;;
+    *) echo "" ;;
+  esac
+}
+
+_set_bool_var() {
+  local name="$1"
+  local raw="$2"
+  local norm
+  norm="$(_normalize_bool "$raw")"
+  if [[ -z "$norm" ]]; then
+    echo "Invalid boolean for $name: '$raw'" >&2
+    exit 2
+  fi
+  printf -v "$name" '%s' "$norm"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        print_help
+        exit 0
+        ;;
+
+      --dotfiles-repo)
+        [[ $# -ge 2 ]] || { echo "--dotfiles-repo requires a value" >&2; exit 2; }
+        DOTFILES_REPO="$2"; shift 2 ;;
+      --dotfiles-dir)
+        [[ $# -ge 2 ]] || { echo "--dotfiles-dir requires a value" >&2; exit 2; }
+        DOTFILES_DIR="$2"; shift 2 ;;
+      --stow-packages)
+        [[ $# -ge 2 ]] || { echo "--stow-packages requires a value" >&2; exit 2; }
+        STOW_PACKAGES="$2"; shift 2 ;;
+
+      --stow)
+        [[ $# -ge 2 ]] || { echo "--stow requires true|false" >&2; exit 2; }
+        _set_bool_var DO_STOW "$2"; shift 2 ;;
+      --apt-upgrade)
+        [[ $# -ge 2 ]] || { echo "--apt-upgrade requires true|false" >&2; exit 2; }
+        _set_bool_var DO_APT_UPGRADE "$2"; shift 2 ;;
+
+      --install-gui)
+        [[ $# -ge 2 ]] || { echo "--install-gui requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_GUI "$2"; shift 2 ;;
+      --install-fonts)
+        [[ $# -ge 2 ]] || { echo "--install-fonts requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_FONTS "$2"; shift 2 ;;
+      --install-1pw)
+        [[ $# -ge 2 ]] || { echo "--install-1pw requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_1PW "$2"; shift 2 ;;
+      --install-kubectl)
+        [[ $# -ge 2 ]] || { echo "--install-kubectl requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_KUBECTL "$2"; shift 2 ;;
+      --install-k9s)
+        [[ $# -ge 2 ]] || { echo "--install-k9s requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_K9S "$2"; shift 2 ;;
+      --install-rust)
+        [[ $# -ge 2 ]] || { echo "--install-rust requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_RUST "$2"; shift 2 ;;
+      --install-starship)
+        [[ $# -ge 2 ]] || { echo "--install-starship requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_STARSHIP "$2"; shift 2 ;;
+      --install-claude)
+        [[ $# -ge 2 ]] || { echo "--install-claude requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_CLAUDE "$2"; shift 2 ;;
+
+      --no-stow) DO_STOW=0; shift ;;
+      --no-apt-upgrade) DO_APT_UPGRADE=0; shift ;;
+      --no-install-gui) INSTALL_GUI=0; shift ;;
+      --no-install-fonts) INSTALL_FONTS=0; shift ;;
+      --no-install-1pw) INSTALL_1PW=0; shift ;;
+      --no-install-kubectl) INSTALL_KUBECTL=0; shift ;;
+      --no-install-k9s) INSTALL_K9S=0; shift ;;
+      --no-install-rust) INSTALL_RUST=0; shift ;;
+      --no-install-starship) INSTALL_STARSHIP=0; shift ;;
+      --no-install-claude) INSTALL_CLAUDE=0; shift ;;
+
+      *)
+        echo "Unknown option: $1" >&2
+        echo "Run: ./setup --help" >&2
+        exit 2
+        ;;
+    esac
+  done
+}
 
 # -------- Helpers --------
 has() { command -v "$1" >/dev/null 2>&1; }
@@ -79,13 +213,12 @@ brew_ensure_formula() {
     return 0
   fi
 
-  if brew outdated --formula "$pkg" >/dev/null 2>&1; then
-    # brew outdated exits 0 when there are outdated formulae matching
-    if [[ -n "$(brew outdated --formula "$pkg")" ]]; then
-      echo "brew: upgrade $pkg"
-      brew upgrade "$pkg"
-      return 0
-    fi
+  local outdated
+  outdated="$(brew outdated --formula "$pkg" 2>/dev/null || true)"
+  if [[ -n "$outdated" ]]; then
+    echo "brew: upgrade $pkg"
+    brew upgrade "$pkg"
+    return 0
   fi
 
   echo "brew: $pkg already up-to-date"
@@ -126,25 +259,6 @@ ensure_brew_in_path() {
 
 # -------- Nerd Fonts installation --------
 install_nerd_fonts() {
-#
-# -------- Claude CLI installation --------
-install_claude() {
-  [[ "${INSTALL_CLAUDE:-1}" == "1" ]] || return 0
-
-  _h "Installing Claude (claude.ai)"
-
-  need_cmd curl
-
-  # Best-effort: avoid reinstall if already present
-  if has claude; then
-    echo "claude already present: $(command -v claude)"
-    return 0
-  fi
-
-  # claude.ai installer is intended to be cross-platform (macOS + Linux)
-  # Run in a subshell to avoid polluting current shell env.
-  ( curl -fsSL https://claude.ai/install.sh | bash )
-}
   [[ "${INSTALL_FONTS:-1}" == "1" ]] || return 0
 
   _h "Installing Nerd Fonts (glyphs/icons for tmux + prompt)"
@@ -193,6 +307,25 @@ install_claude() {
       echo "Note: fc-cache not found. Install fontconfig and run: fc-cache -f" >&2
     fi
   fi
+}
+
+# -------- Claude CLI installation --------
+install_claude() {
+  [[ "${INSTALL_CLAUDE:-1}" == "1" ]] || return 0
+
+  _h "Installing Claude (claude.ai)"
+
+  need_cmd curl
+
+  # Best-effort: avoid reinstall if already present
+  if has claude; then
+    echo "claude already present: $(command -v claude)"
+    return 0
+  fi
+
+  # claude.ai installer is intended to be cross-platform (macOS + Linux)
+  # Run in a subshell to avoid polluting current shell env.
+  ( curl -fsSL https://claude.ai/install.sh | bash )
 }
 
 # -------- Zsh environment persistence (brew + cargo + sane config) --------
@@ -423,8 +556,10 @@ install_linux_packages() {
 
   sudo apt-get update -y
 
-  # Keep existing packages current before installing new ones
-  sudo apt-get upgrade -y
+  # Optional: full upgrade can be slow/noisy on fresh machines; keep it opt-in.
+  if [[ "${DO_APT_UPGRADE:-0}" == "1" ]]; then
+    sudo apt-get upgrade -y
+  fi
   sudo apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -440,9 +575,15 @@ install_linux_packages() {
     zsh \
     fzf \
     python3 \
-    python3-pip \
-    k9s \
-    starship
+    python3-pip
+
+  if [[ "$INSTALL_STARSHIP" == "1" ]]; then
+    sudo apt-get install -y --no-install-recommends starship || true
+  fi
+
+  if [[ "$INSTALL_K9S" == "1" ]]; then
+    sudo apt-get install -y --no-install-recommends k9s || true
+  fi
 
   if [[ "$INSTALL_STARSHIP" == "1" ]]; then
     if ! has starship; then
@@ -657,7 +798,35 @@ post_checks() {
     echo "Note: $HOME/.local/bin is not on PATH (your stowed bin scripts may not resolve)." >&2
   fi
 
-  for c in git stow nvim tmux zsh python3 pip3 kubectl k9s starship; do
+  local -a checks
+  checks=(git stow nvim tmux zsh python3 pip3)
+
+  if [[ "$INSTALL_KUBECTL" == "1" ]]; then
+    checks+=(kubectl)
+  fi
+
+  if [[ "$INSTALL_K9S" == "1" ]]; then
+    checks+=(k9s)
+  fi
+
+  if [[ "$INSTALL_STARSHIP" == "1" ]]; then
+    checks+=(starship)
+  fi
+
+  if [[ "$INSTALL_1PW" == "1" ]]; then
+    checks+=(op)
+  fi
+
+  if [[ "$INSTALL_CLAUDE" == "1" ]]; then
+    checks+=(claude)
+  fi
+
+  if [[ "$INSTALL_GUI" == "1" ]]; then
+    checks+=(kitty)
+  fi
+
+  local c
+  for c in "${checks[@]}"; do
     if has "$c"; then
       echo "OK: $c -> $(command -v "$c")"
     else
@@ -689,23 +858,6 @@ post_checks() {
     fi
   fi
 
-  if [[ "$INSTALL_1PW" == "1" ]]; then
-    if has op; then
-      echo "OK: op -> $(command -v op)"
-      echo "Note: run 'op signin' manually to authenticate."
-    else
-      echo "MISSING: op (1Password CLI)" >&2
-    fi
-  fi
-
-  if [[ "$INSTALL_KUBECTL" == "1" ]]; then
-    if has kubectl; then
-      echo "OK: kubectl -> $(command -v kubectl)"
-    else
-      echo "MISSING: kubectl" >&2
-    fi
-  fi
-
   if [[ "$INSTALL_RUST" == "1" ]]; then
     if has cargo; then
       echo "OK: cargo -> $(command -v cargo)"
@@ -714,18 +866,8 @@ post_checks() {
     fi
   fi
 
-  if [[ "$INSTALL_CLAUDE" == "1" ]]; then
-    if has claude; then
-      echo "OK: claude -> $(command -v claude)"
-    else
-      echo "MISSING: claude (Claude CLI)" >&2
-    fi
-  fi
-
   if [[ "$INSTALL_GUI" == "1" ]]; then
-    if has kitty; then
-      echo "OK: kitty -> $(command -v kitty)"
-    elif [[ -d "$HOME/Applications/Kitty.app" ]]; then
+    if [[ -d "$HOME/Applications/Kitty.app" ]]; then
       echo "OK: Kitty.app found in $HOME/Applications"
     elif [[ -d "/Applications/Kitty.app" ]]; then
       echo "OK: Kitty.app found in /Applications"
@@ -744,6 +886,7 @@ post_checks() {
 
 main() {
   _h "Bootstrapping terminal environment"
+  parse_args "$@"
 
   if [[ $IS_DARWIN -eq 1 ]]; then
     install_macos_packages
