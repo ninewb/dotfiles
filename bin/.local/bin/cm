@@ -16,7 +16,7 @@ Commands:
   add aws <cluster> <region> [alias]              Add EKS credentials/context (optional context alias)
   add gcp <cluster> <location> <project> [alias]  Add GKE credentials/context (location is region or zone; optional context alias)
   list                                            List contexts (kubectl config get-contexts)
-  use <context>                                   Switch current context
+  use [<context>]                                 Switch current context (interactive if no context)
   current                                         Print current context
   delete [<context>]                              Delete a context and its associated cluster/user from kubeconfig (interactive if no context)
 
@@ -46,33 +46,168 @@ require() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
-# Locate fzf even if PATH is not fully initialized.
-find_fzf() {
-  if command -v fzf >/dev/null 2>&1; then
-    command -v fzf
-    return 0
-  fi
+# Lowercase helper (bash 3.2 compatible)
+_lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
-  local candidates=(
-    "/opt/homebrew/bin/fzf"
-    "/usr/local/bin/fzf"
-    "$HOME/.fzf/bin/fzf"
-  )
+# Filter items by a case-insensitive substring.
+# Usage: filter_items <needle> <items...>
+# Prints matching items, one per line.
+filter_items() {
+  local needle="$1"; shift
+  local n_lc
+  n_lc="$(_lc "$needle")"
 
-  local c
-  for c in "${candidates[@]}"; do
-    if [[ -x "$c" ]]; then
-      echo "$c"
-      return 0
+  local it
+  for it in "$@"; do
+    if [[ -z "$needle" ]]; then
+      printf '%s\n' "$it"
+    else
+      local it_lc
+      it_lc="$(_lc "$it")"
+      if [[ "$it_lc" == *"$n_lc"* ]]; then
+        printf '%s\n' "$it"
+      fi
     fi
   done
-
-  return 1
 }
 
-has_fzf() {
-  [[ -n "${FZF_BIN:-}" ]] || FZF_BIN="$(find_fzf 2>/dev/null || true)"
-  [[ -n "${FZF_BIN:-}" && -x "${FZF_BIN:-}" ]]
+# Read a single line from /dev/tty if possible (so selection works even when stdout is piped)
+read_tty_line() {
+  local line=""
+  if [[ -r /dev/tty ]]; then
+    IFS= read -r line < /dev/tty
+  else
+    IFS= read -r line
+  fi
+  printf '%s' "$line"
+}
+
+# Minimal portable selector with filtering.
+# Prints the selected item.
+# Behavior:
+# - User can type a filter string to narrow results.
+# - Then choose by number.
+# - Enter on empty filter shows all.
+# - Enter on empty selection cancels.
+select_one_tui() {
+  local title="$1"; shift
+  local -a items=("$@")
+
+  local count="${#items[@]}"
+  (( count == 0 )) && die "No items to choose from"
+
+  local filter=""
+  while true; do
+    echo "$title" >&2
+    echo "Filter (substring, Enter for all, or type 'q' to cancel): " >&2
+    printf '> ' >&2
+    filter="$(read_tty_line)"
+    [[ "$filter" == "q" ]] && return 1
+
+    local -a filtered=()
+    if [[ -z "$filter" ]]; then
+      filtered=("${items[@]}")
+    else
+      read_lines_into_array filtered < <(filter_items "$filter" "${items[@]}")
+    fi
+
+    if (( ${#filtered[@]} == 0 )); then
+      echo "No matches. Try again." >&2
+      echo >&2
+      continue
+    fi
+
+    echo >&2
+    print_numbered "${filtered[@]}" >&2
+    echo >&2
+    echo "Enter a number to select, 'r' to refine filter, or Enter to cancel." >&2
+    printf '> ' >&2
+    local sel
+    sel="$(read_tty_line)"
+
+    [[ -z "$sel" ]] && return 1
+    [[ "$sel" == "r" ]] && { echo >&2; continue; }
+
+    if ! [[ "$sel" =~ ^[0-9]+$ ]]; then
+      echo "Invalid selection: $sel" >&2
+      echo >&2
+      continue
+    fi
+
+    local idx=$((sel-1))
+    if (( idx < 0 || idx >= ${#filtered[@]} )); then
+      echo "Selection out of range: $sel" >&2
+      echo >&2
+      continue
+    fi
+
+    printf '%s\n' "${filtered[$idx]}"
+    return 0
+  done
+}
+
+# Minimal portable multi-selector with filtering.
+# Prints selected items, one per line.
+select_many_tui() {
+  local title="$1"; shift
+  local -a items=("$@")
+
+  local count="${#items[@]}"
+  (( count == 0 )) && die "No items to choose from"
+
+  local filter=""
+  while true; do
+    echo "$title" >&2
+    echo "Filter (substring, Enter for all, or type 'q' to cancel): " >&2
+    printf '> ' >&2
+    filter="$(read_tty_line)"
+    [[ "$filter" == "q" ]] && return 1
+
+    local -a filtered=()
+    if [[ -z "$filter" ]]; then
+      filtered=("${items[@]}")
+    else
+      read_lines_into_array filtered < <(filter_items "$filter" "${items[@]}")
+    fi
+
+    if (( ${#filtered[@]} == 0 )); then
+      echo "No matches. Try again." >&2
+      echo >&2
+      continue
+    fi
+
+    echo >&2
+    print_numbered "${filtered[@]}" >&2
+    echo >&2
+    echo "Enter numbers (e.g. 1,3,5-7), 'all', 'r' to refine filter, or Enter to cancel." >&2
+    printf '> ' >&2
+    local selection
+    selection="$(read_tty_line)"
+
+    [[ -z "$selection" ]] && return 1
+    [[ "$selection" == "r" ]] && { echo >&2; continue; }
+
+    # normalize: remove spaces
+    selection="${selection// /}"
+
+    # Allow "all"
+    if [[ "$selection" == "all" ]]; then
+      printf '%s\n' "${filtered[@]}"
+      return 0
+    fi
+
+    # Convert indices using existing parser.
+    local -A seen=()
+    local idx
+    while read -r idx; do
+      [[ -z "$idx" ]] && continue
+      if [[ -z "${seen[$idx]+x}" ]]; then
+        seen[$idx]=1
+        printf '%s\n' "${filtered[$idx]}"
+      fi
+    done < <(parse_selection_to_indices "$selection" "${#filtered[@]}")
+    return 0
+  done
 }
 
 # Bash 3.2 compatibility: `mapfile` is not available on macOS.
@@ -197,85 +332,16 @@ parse_selection_to_indices() {
   done
 }
 
-# Choose one or more items from a list.
-# Prints selected items, one per line.
-# If `fzf` is installed, uses it for type-ahead filtering.
 choose_many() {
   local title="$1"; shift
   local -a items=("$@")
-
-  local count="${#items[@]}"
-  (( count == 0 )) && die "No items to choose from"
-
-  # If fzf exists, use it for interactive type-ahead selection.
-  if has_fzf; then
-    # Print items and let user multi-select.
-    # Empty selection cancels.
-    local out
-    out="$(printf '%s\n' "${items[@]}" | "$FZF_BIN" --multi --height=80% --layout=reverse --prompt="${title} " --header="TAB=mark, ENTER=confirm, ESC=cancel" || true)"
-    [[ -z "$out" ]] && return 1
-    printf '%s\n' "$out"
-    return 0
-  fi
-
-  # Fallback: numbered selection.
-  echo "$title"
-  print_numbered "${items[@]}"
-  echo
-  echo "Enter numbers to select (e.g. 1,3,5-7), or 'all', or press Enter to cancel."
-  local selection
-  selection="$(prompt "> ")"
-  echo
-
-  [[ -z "$selection" ]] && return 1
-
-  # Deduplicate selections while preserving order.
-  local -A seen=()
-  local idx
-  while read -r idx; do
-    [[ -z "$idx" ]] && continue
-    if [[ -z "${seen[$idx]+x}" ]]; then
-      seen[$idx]=1
-      echo "${items[$idx]}"
-    fi
-  done < <(parse_selection_to_indices "$selection" "$count")
+  select_many_tui "$title" "${items[@]}"
 }
 
-# Choose exactly one item from a list.
-# Prints the selected item.
-# If `fzf` is installed, uses it for type-ahead filtering.
 choose_one() {
   local title="$1"; shift
   local -a items=("$@")
-
-  local count="${#items[@]}"
-  (( count == 0 )) && die "No items to choose from"
-
-  if has_fzf; then
-    local out
-    out="$(printf '%s\n' "${items[@]}" | "$FZF_BIN" --height=80% --layout=reverse --prompt="${title} " --header="Type to filter, ENTER=select, ESC=cancel" || true)"
-    [[ -z "$out" ]] && return 1
-    printf '%s\n' "$out"
-    return 0
-  fi
-
-  echo "$title"
-  print_numbered "${items[@]}"
-  echo
-  echo "Enter a number to select, or press Enter to cancel."
-  local selection
-  selection="$(prompt "> ")"
-  echo
-
-  [[ -z "$selection" ]] && return 1
-  if ! [[ "$selection" =~ ^[0-9]+$ ]]; then
-    die "Invalid selection token: $selection"
-  fi
-  local idx=$((selection-1))
-  if (( idx < 0 || idx >= count )); then
-    die "Selection out of range: $selection"
-  fi
-  echo "${items[$idx]}"
+  select_one_tui "$title" "${items[@]}"
 }
 
 list_contexts() {
@@ -488,7 +554,25 @@ cmd_list() {
 
 cmd_use() {
   local kubeconfig="$1"
-  local ctx="$2"
+  local ctx="${2:-}"
+
+  if [[ -z "$ctx" ]]; then
+    cmd_to_array contexts list_context_names "$kubeconfig"
+    if (( ${#contexts[@]} == 0 )); then
+      die "No contexts found"
+    fi
+
+    if ! ctx="$(choose_one "Select context to use:" "${contexts[@]}")"; then
+      err "Cancelled"
+      return 1
+    fi
+  fi
+
+  # Ensure context exists.
+  if ! kubectl_cfg "$kubeconfig" config get-contexts -o name | grep -qx "$ctx"; then
+    die "Context not found: $ctx"
+  fi
+
   kubectl_cfg "$kubeconfig" config use-context "$ctx"
 }
 
@@ -578,10 +662,6 @@ cmd_delete_cluster() {
 cmd_delete() {
   local kubeconfig="$1"
   local ctx="${2:-}"
-
-  if [[ -z "$ctx" ]] && ! has_fzf; then
-    err "Tip: install 'fzf' for type-ahead context selection (or run: cm completion zsh / bash for TAB completion)."
-  fi
 
   # If no context provided, choose interactively.
   if [[ -z "$ctx" ]]; then
@@ -809,8 +889,8 @@ main() {
       cmd_list "$kubeconfig"
       ;;
     use)
-      [[ $# -lt 1 ]] && die "use requires <context>"
-      cmd_use "$kubeconfig" "$1"
+      # If no <context> is provided, cmd_use will prompt interactively.
+      cmd_use "$kubeconfig" "${1:-}"
       ;;
     current)
       cmd_current "$kubeconfig"
