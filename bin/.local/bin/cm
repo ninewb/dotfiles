@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 # cm: kubeconfig/context manager
-#
-# Goals:
-# - Provide a thin wrapper around common `kubectl config` operations.
-# - Make it easy to add AKS contexts (using an existing naming convention).
-# - Provide an interactive way to remove contexts/clusters.
 
 CM_KUBECONFIG_DEFAULT="${CM_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}"
 
@@ -23,11 +17,7 @@ Commands:
   list                     List contexts (kubectl config get-contexts)
   use <context>            Switch current context
   current                  Print current context
-
-  delete-context [<name>]  Delete a context (interactive if no name provided)
-  delete-cluster  [<name>] Delete a cluster  (interactive if no name provided)
   delete [<context>]         Delete a context and its associated cluster/user from kubeconfig (interactive if no context)
-  completion [bash|zsh]      Print shell completion script for cm
 
 Notes:
   - If CM_KUBECONFIG is set, it is used.
@@ -56,17 +46,97 @@ require() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+# Locate fzf even if PATH is not fully initialized.
+find_fzf() {
+  if command -v fzf >/dev/null 2>&1; then
+    command -v fzf
+    return 0
+  fi
+
+  local candidates=(
+    "/opt/homebrew/bin/fzf"
+    "/usr/local/bin/fzf"
+    "$HOME/.fzf/bin/fzf"
+  )
+
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -x "$c" ]]; then
+      echo "$c"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+has_fzf() {
+  [[ -n "${FZF_BIN:-}" ]] || FZF_BIN="$(find_fzf 2>/dev/null || true)"
+  [[ -n "${FZF_BIN:-}" && -x "${FZF_BIN:-}" ]]
+}
+
+# Bash 3.2 compatibility: `mapfile` is not available on macOS.
+# Read lines from stdin into a named array variable.
+read_lines_into_array() {
+  local __arr_name="$1"
+  # shellcheck disable=SC2034
+  local __line
+
+  # Clear the array
+  eval "$__arr_name=()"
+
+  if command -v mapfile >/dev/null 2>&1; then
+    # Bash 4+
+    mapfile -t "$__arr_name"
+    return 0
+  fi
+
+  # Bash 3.2 fallback
+  while IFS= read -r __line; do
+    eval "$__arr_name+=(\"$__line\")"
+  done
+}
+
+# Capture the output of a command into a named array (one item per line).
+cmd_to_array() {
+  local __arr_name="$1"; shift
+  # Use process substitution to feed into read_lines_into_array
+  read_lines_into_array "$__arr_name" < <("$@")
+}
+
+# Capture the output of a pipeline (provided as a string) into a named array.
+# Use sparingly; intended for cases where we already build a pipeline with args.
+pipeline_to_array() {
+  local __arr_name="$1"
+  local __pipeline="$2"
+  # shellcheck disable=SC2090
+  read_lines_into_array "$__arr_name" < <(eval "$__pipeline")
+}
+
 # Run kubectl against a specific kubeconfig, without forcing users to export env vars.
 kubectl_cfg() {
   local kubeconfig="$1"; shift
   KUBECONFIG="$kubeconfig" kubectl "$@"
 }
 
-# Read a single line from stdin with a prompt.
+# Read a single line from the user with a prompt.
 prompt() {
   local msg="$1"
-  read -r -p "$msg" REPLY
-  printf '%s' "$REPLY"
+  local line=""
+
+  # Always print prompt to stderr so it shows up even if stdout is being piped.
+  printf '%s' "$msg" >&2
+
+  if [[ -t 0 ]]; then
+    IFS= read -r line
+  elif [[ -r /dev/tty ]]; then
+    IFS= read -r line < /dev/tty
+  else
+    # Last resort: read from stdin (may block if truly non-interactive)
+    IFS= read -r line
+  fi
+
+  printf '%s' "$line"
 }
 
 # Render a numbered list of items
@@ -138,11 +208,11 @@ choose_many() {
   (( count == 0 )) && die "No items to choose from"
 
   # If fzf exists, use it for interactive type-ahead selection.
-  if command -v fzf >/dev/null 2>&1; then
+  if has_fzf; then
     # Print items and let user multi-select.
     # Empty selection cancels.
     local out
-    out="$(printf '%s\n' "${items[@]}" | fzf --multi --prompt="${title} " --header="TAB=mark, ENTER=confirm, ESC=cancel" || true)"
+    out="$(printf '%s\n' "${items[@]}" | "$FZF_BIN" --multi --height=80% --layout=reverse --prompt="${title} " --header="TAB=mark, ENTER=confirm, ESC=cancel" || true)"
     [[ -z "$out" ]] && return 1
     printf '%s\n' "$out"
     return 0
@@ -181,9 +251,9 @@ choose_one() {
   local count="${#items[@]}"
   (( count == 0 )) && die "No items to choose from"
 
-  if command -v fzf >/dev/null 2>&1; then
+  if has_fzf; then
     local out
-    out="$(printf '%s\n' "${items[@]}" | fzf --prompt="${title} " --header="Type to filter, ENTER=select, ESC=cancel" || true)"
+    out="$(printf '%s\n' "${items[@]}" | "$FZF_BIN" --height=80% --layout=reverse --prompt="${title} " --header="Type to filter, ENTER=select, ESC=cancel" || true)"
     [[ -z "$out" ]] && return 1
     printf '%s\n' "$out"
     return 0
@@ -437,13 +507,13 @@ cmd_delete_context() {
     return 0
   fi
 
-  mapfile -t contexts < <(list_context_names "$kubeconfig")
+  cmd_to_array contexts list_context_names "$kubeconfig"
   if (( ${#contexts[@]} == 0 )); then
     die "No contexts found"
   fi
 
   local -a selected=()
-  if mapfile -t selected < <(choose_many "Select context(s) to delete:" "${contexts[@]}"); then
+  if read_lines_into_array selected < <(choose_many "Select context(s) to delete:" "${contexts[@]}"); then
     :
   else
     err "Cancelled"
@@ -475,13 +545,13 @@ cmd_delete_cluster() {
     return 0
   fi
 
-  mapfile -t clusters < <(list_cluster_names "$kubeconfig" | tail -n +2)
+  pipeline_to_array clusters "list_cluster_names \"$kubeconfig\" | tail -n +2"
   if (( ${#clusters[@]} == 0 )); then
     die "No clusters found"
   fi
 
   local -a selected=()
-  if mapfile -t selected < <(choose_many "Select cluster(s) to delete:" "${clusters[@]}"); then
+  if read_lines_into_array selected < <(choose_many "Select cluster(s) to delete:" "${clusters[@]}"); then
     :
   else
     err "Cancelled"
@@ -509,9 +579,13 @@ cmd_delete() {
   local kubeconfig="$1"
   local ctx="${2:-}"
 
+  if [[ -z "$ctx" ]] && ! has_fzf; then
+    err "Tip: install 'fzf' for type-ahead context selection (or run: cm completion zsh / bash for TAB completion)."
+  fi
+
   # If no context provided, choose interactively.
   if [[ -z "$ctx" ]]; then
-    mapfile -t contexts < <(list_context_names "$kubeconfig")
+    cmd_to_array contexts list_context_names "$kubeconfig"
     if (( ${#contexts[@]} == 0 )); then
       die "No contexts found"
     fi
@@ -743,15 +817,6 @@ main() {
       ;;
     delete)
       cmd_delete "$kubeconfig" "${1:-}"
-      ;;
-    delete-context|rm-context|remove-context)
-      cmd_delete_context "$kubeconfig" "${1:-}"
-      ;;
-    delete-cluster|rm-cluster|remove-cluster)
-      cmd_delete_cluster "$kubeconfig" "${1:-}"
-      ;;
-    completion)
-      cmd_completion "$kubeconfig" "${1:-bash}"
       ;;
     "")
       usage
