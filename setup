@@ -377,6 +377,23 @@ ensure_zsh_config() {
 
   local home_zshenv="$HOME/.zshenv"
   touch "$home_zshenv"
+  # Ensure critical PATH entries exist even if other zsh config fails to load
+  if ! grep -q '^# >>> dotfiles bootstrap PATH >>>' "$home_zshenv"; then
+    cat >> "$home_zshenv" <<'EOF'
+
+# >>> dotfiles bootstrap PATH >>>
+# Minimal PATH required for stowed scripts and Homebrew tools
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+
+# Homebrew (Apple Silicon + Intel fallback)
+if [[ -x /opt/homebrew/bin/brew ]]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -x /usr/local/bin/brew ]]; then
+  eval "$(/usr/local/bin/brew shellenv)"
+fi
+# <<< dotfiles bootstrap PATH <<<
+EOF
+  fi
   if ! grep -q '^export ZDOTDIR=' "$home_zshenv"; then
     printf '\nexport ZDOTDIR="$HOME"/.config/zsh\n' >> "$home_zshenv"
     # Allow local overrides that should NOT live in the dotfiles repo
