@@ -13,7 +13,7 @@ Usage:
 Commands:
   add <resource>                                  Add AKS credentials/context for <resource> (default: azure)
   add azure <resource>                            Add AKS credentials/context for <resource>
-  add aws <cluster> <region> [alias]               Add EKS credentials/context (optional context alias)
+  add aws <cluster> <region> [alias]              Add EKS credentials/context (optional context alias)
   add gcp <cluster> <location> <project> [alias]  Add GKE credentials/context (location is region or zone; optional context alias)
   list                                            List contexts (kubectl config get-contexts)
   use [<context>]                                 Switch current context (interactive if no context)
