@@ -1,0 +1,766 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# cm: kubeconfig/context manager
+#
+# Goals:
+# - Provide a thin wrapper around common `kubectl config` operations.
+# - Make it easy to add AKS contexts (using an existing naming convention).
+# - Provide an interactive way to remove contexts/clusters.
+
+CM_KUBECONFIG_DEFAULT="${CM_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  cm [--kubeconfig <path>] <command> [args]
+
+Commands:
+  add <deployId>                    Add AKS credentials/context for <deployId> (default: azure)
+  add azure <deployId>              Add AKS credentials/context for <deployId>
+  add aws <cluster> <region> [alias]  Add EKS credentials/context (optional context alias)
+  add gcp <cluster> <location> <project> [alias]  Add GKE credentials/context (location is region or zone; optional context alias)
+  list                     List contexts (kubectl config get-contexts)
+  use <context>            Switch current context
+  current                  Print current context
+
+  delete-context [<name>]  Delete a context (interactive if no name provided)
+  delete-cluster  [<name>] Delete a cluster  (interactive if no name provided)
+  delete [<context>]         Delete a context and its associated cluster/user from kubeconfig (interactive if no context)
+  completion [bash|zsh]      Print shell completion script for cm
+
+Notes:
+  - If CM_KUBECONFIG is set, it is used.
+  - Otherwise KUBECONFIG is used.
+  - Otherwise defaults to ~/.kube/config
+
+Examples:
+  cm add aml-essentials-56101
+  cm add azure aml-essentials-56101
+  cm add aws prod-eks us-east-1 aws-prod-eks
+  cm add gcp analytics-cluster us-central1 my-project gcp-analytics
+  cm list
+  cm use aml-essentials-56101
+  cm delete-context
+  cm delete
+  cm delete aws-prod-eks
+  cm --kubeconfig ~/.kube/config delete-cluster
+EOF
+}
+
+err() { echo "cm: $*" >&2; }
+
+die() { err "$*"; exit 1; }
+
+require() {
+  command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
+}
+
+# Run kubectl against a specific kubeconfig, without forcing users to export env vars.
+kubectl_cfg() {
+  local kubeconfig="$1"; shift
+  KUBECONFIG="$kubeconfig" kubectl "$@"
+}
+
+# Read a single line from stdin with a prompt.
+prompt() {
+  local msg="$1"
+  read -r -p "$msg" REPLY
+  printf '%s' "$REPLY"
+}
+
+# Render a numbered list of items
+print_numbered() {
+  local -a items=("$@")
+  local i
+  for i in "${!items[@]}"; do
+    printf '%3d) %s\n' "$((i+1))" "${items[$i]}"
+  done
+}
+
+# Parse a selection string like: "1,2,5-7" into indices (0-based)
+# Prints indices, one per line.
+parse_selection_to_indices() {
+  local selection="$1"
+  local max="$2"  # number of items
+
+  # normalize: remove spaces
+  selection="${selection// /}"
+
+  # Allow "all"
+  if [[ "$selection" == "all" ]]; then
+    for ((i=0;i<max;i++)); do echo "$i"; done
+    return 0
+  fi
+
+  local IFS=','
+  read -r -a parts <<< "$selection"
+
+  local part
+  for part in "${parts[@]}"; do
+    [[ -z "$part" ]] && continue
+
+    if [[ "$part" =~ ^[0-9]+-[0-9]+$ ]]; then
+      local start="${part%-*}"
+      local end="${part#*-}"
+      # Convert to 0-based
+      start=$((start-1))
+      end=$((end-1))
+      if (( start < 0 || end < 0 || start >= max || end >= max )); then
+        die "Selection out of range: $part"
+      fi
+      if (( start > end )); then
+        die "Invalid range (start > end): $part"
+      fi
+      for ((i=start;i<=end;i++)); do echo "$i"; done
+
+    elif [[ "$part" =~ ^[0-9]+$ ]]; then
+      local idx=$((part-1))
+      if (( idx < 0 || idx >= max )); then
+        die "Selection out of range: $part"
+      fi
+      echo "$idx"
+
+    else
+      die "Invalid selection token: $part"
+    fi
+  done
+}
+
+# Choose one or more items from a list.
+# Prints selected items, one per line.
+# If `fzf` is installed, uses it for type-ahead filtering.
+choose_many() {
+  local title="$1"; shift
+  local -a items=("$@")
+
+  local count="${#items[@]}"
+  (( count == 0 )) && die "No items to choose from"
+
+  # If fzf exists, use it for interactive type-ahead selection.
+  if command -v fzf >/dev/null 2>&1; then
+    # Print items and let user multi-select.
+    # Empty selection cancels.
+    local out
+    out="$(printf '%s\n' "${items[@]}" | fzf --multi --prompt="${title} " --header="TAB=mark, ENTER=confirm, ESC=cancel" || true)"
+    [[ -z "$out" ]] && return 1
+    printf '%s\n' "$out"
+    return 0
+  fi
+
+  # Fallback: numbered selection.
+  echo "$title"
+  print_numbered "${items[@]}"
+  echo
+  echo "Enter numbers to select (e.g. 1,3,5-7), or 'all', or press Enter to cancel."
+  local selection
+  selection="$(prompt "> ")"
+  echo
+
+  [[ -z "$selection" ]] && return 1
+
+  # Deduplicate selections while preserving order.
+  local -A seen=()
+  local idx
+  while read -r idx; do
+    [[ -z "$idx" ]] && continue
+    if [[ -z "${seen[$idx]+x}" ]]; then
+      seen[$idx]=1
+      echo "${items[$idx]}"
+    fi
+  done < <(parse_selection_to_indices "$selection" "$count")
+}
+
+# Choose exactly one item from a list.
+# Prints the selected item.
+# If `fzf` is installed, uses it for type-ahead filtering.
+choose_one() {
+  local title="$1"; shift
+  local -a items=("$@")
+
+  local count="${#items[@]}"
+  (( count == 0 )) && die "No items to choose from"
+
+  if command -v fzf >/dev/null 2>&1; then
+    local out
+    out="$(printf '%s\n' "${items[@]}" | fzf --prompt="${title} " --header="Type to filter, ENTER=select, ESC=cancel" || true)"
+    [[ -z "$out" ]] && return 1
+    printf '%s\n' "$out"
+    return 0
+  fi
+
+  echo "$title"
+  print_numbered "${items[@]}"
+  echo
+  echo "Enter a number to select, or press Enter to cancel."
+  local selection
+  selection="$(prompt "> ")"
+  echo
+
+  [[ -z "$selection" ]] && return 1
+  if ! [[ "$selection" =~ ^[0-9]+$ ]]; then
+    die "Invalid selection token: $selection"
+  fi
+  local idx=$((selection-1))
+  if (( idx < 0 || idx >= count )); then
+    die "Selection out of range: $selection"
+  fi
+  echo "${items[$idx]}"
+}
+
+list_contexts() {
+  local kubeconfig="$1"
+  kubectl_cfg "$kubeconfig" config get-contexts
+}
+
+list_context_names() {
+  local kubeconfig="$1"
+  kubectl_cfg "$kubeconfig" config get-contexts -o name
+}
+
+list_cluster_names() {
+  local kubeconfig="$1"
+  kubectl_cfg "$kubeconfig" config get-clusters
+}
+
+get_context_cluster() {
+  local kubeconfig="$1"
+  local ctx="$2"
+  kubectl_cfg "$kubeconfig" config view -o jsonpath="{.contexts[?(@.name=='${ctx}')].context.cluster}"
+}
+
+get_context_user() {
+  local kubeconfig="$1"
+  local ctx="$2"
+  kubectl_cfg "$kubeconfig" config view -o jsonpath="{.contexts[?(@.name=='${ctx}')].context.user}"
+}
+
+count_other_context_refs_cluster() {
+  local kubeconfig="$1"
+  local target_ctx="$2"
+  local cluster="$3"
+
+  local line
+  local count=0
+  # Output format: ctx<TAB>cluster
+  while IFS=$'\t' read -r line; do
+    local ctx="${line%%$'\t'*}"
+    local cl="${line#*$'\t'}"
+    [[ "$ctx" == "$target_ctx" ]] && continue
+    [[ "$cl" == "$cluster" ]] && count=$((count+1))
+  done < <(kubectl_cfg "$kubeconfig" config view -o jsonpath='{range .contexts[*]}{.name}{"\t"}{.context.cluster}{"\n"}{end}')
+
+  echo "$count"
+}
+
+count_other_context_refs_user() {
+  local kubeconfig="$1"
+  local target_ctx="$2"
+  local user="$3"
+
+  local line
+  local count=0
+  # Output format: ctx<TAB>user
+  while IFS=$'\t' read -r line; do
+    local ctx="${line%%$'\t'*}"
+    local u="${line#*$'\t'}"
+    [[ "$ctx" == "$target_ctx" ]] && continue
+    [[ "$u" == "$user" ]] && count=$((count+1))
+  done < <(kubectl_cfg "$kubeconfig" config view -o jsonpath='{range .contexts[*]}{.name}{"\t"}{.context.user}{"\n"}{end}')
+
+  echo "$count"
+}
+
+rename_context_best_effort() {
+  local kubeconfig="$1"
+  local desired="$2"
+
+  [[ -z "$desired" ]] && return 0
+
+  # Best-effort rename of current context to a friendly name.
+  local current
+  current="$(kubectl_cfg "$kubeconfig" config current-context 2>/dev/null || true)"
+  if [[ -n "$current" && "$current" != "$desired" ]]; then
+    if ! kubectl_cfg "$kubeconfig" config get-contexts -o name | grep -qx "$desired"; then
+      err "Renaming context '$current' -> '$desired'"
+      kubectl_cfg "$kubeconfig" config rename-context "$current" "$desired" || true
+    fi
+  fi
+}
+
+cmd_add_azure() {
+  local kubeconfig="$1"
+  local deployId="$2"
+
+  require az
+
+  # Convention:
+  #   Resource Group: <deployId>-rg
+  #   AKS Name:       <deployId>-aks
+  # Context name should be <deployId> (helps when you have many).
+  #
+  # Note: `az aks get-credentials` will merge into the provided kubeconfig.
+  err "Adding AKS credentials for deployId='$deployId' into kubeconfig: $kubeconfig"
+
+  # Ensure kubeconfig directory exists.
+  mkdir -p "$(dirname "$kubeconfig")"
+
+  az aks get-credentials \
+    --resource-group "${deployId}-rg" \
+    --name "${deployId}-aks" \
+    --file "$kubeconfig" \
+    --overwrite-existing
+
+  rename_context_best_effort "$kubeconfig" "$deployId"
+  err "Done. Current context: $(kubectl_cfg "$kubeconfig" config current-context)"
+}
+
+cmd_add_aws() {
+  local kubeconfig="$1"
+  local cluster="$2"
+  local region="$3"
+  local alias="${4:-}"
+
+  require aws
+
+  err "Adding EKS credentials for cluster='$cluster' region='$region' into kubeconfig: $kubeconfig"
+
+  # Ensure kubeconfig directory exists.
+  mkdir -p "$(dirname "$kubeconfig")"
+
+  if [[ -n "$alias" ]]; then
+    aws eks update-kubeconfig \
+      --name "$cluster" \
+      --region "$region" \
+      --kubeconfig "$kubeconfig" \
+      --alias "$alias"
+    rename_context_best_effort "$kubeconfig" "$alias"
+  else
+    aws eks update-kubeconfig \
+      --name "$cluster" \
+      --region "$region" \
+      --kubeconfig "$kubeconfig"
+  fi
+
+  err "Done. Current context: $(kubectl_cfg "$kubeconfig" config current-context)"
+}
+
+cmd_add_gcp() {
+  local kubeconfig="$1"
+  local cluster="$2"
+  local location="$3"   # region (e.g. us-central1) OR zone (e.g. us-central1-a)
+  local project="$4"
+  local alias="${5:-}"
+
+  require gcloud
+
+  err "Adding GKE credentials for cluster='$cluster' location='$location' project='$project' into kubeconfig: $kubeconfig"
+
+  # Ensure kubeconfig directory exists.
+  mkdir -p "$(dirname "$kubeconfig")"
+
+  # gcloud does not have a direct --kubeconfig flag; it respects KUBECONFIG.
+  # Heuristic: zones typically end with a trailing -[a-z] (e.g. us-central1-a).
+  if [[ "$location" =~ -[a-z]$ ]]; then
+    KUBECONFIG="$kubeconfig" gcloud container clusters get-credentials "$cluster" \
+      --zone "$location" \
+      --project "$project"
+  else
+    KUBECONFIG="$kubeconfig" gcloud container clusters get-credentials "$cluster" \
+      --region "$location" \
+      --project "$project"
+  fi
+
+  if [[ -n "$alias" ]]; then
+    rename_context_best_effort "$kubeconfig" "$alias"
+  fi
+
+  err "Done. Current context: $(kubectl_cfg "$kubeconfig" config current-context)"
+}
+
+cmd_add() {
+  local kubeconfig="$1"
+  shift
+
+  # Back-compat:
+  #   cm add <deployId>            -> azure
+  #   cm add azure <deployId>
+  #   cm add aws <cluster> <region> [alias]
+  #   cm add gcp <cluster> <location> <project> [alias]
+
+  local provider="${1:-}"
+
+  case "$provider" in
+    azure)
+      [[ $# -lt 2 ]] && die "add azure requires <deployId>"
+      cmd_add_azure "$kubeconfig" "$2"
+      ;;
+    aws)
+      [[ $# -lt 3 ]] && die "add aws requires <cluster> <region> [alias]"
+      cmd_add_aws "$kubeconfig" "$2" "$3" "${4:-}"
+      ;;
+    gcp)
+      [[ $# -lt 4 ]] && die "add gcp requires <cluster> <location> <project> [alias]"
+      cmd_add_gcp "$kubeconfig" "$2" "$3" "$4" "${5:-}"
+      ;;
+    *)
+      # Default to azure deployId if provider is not recognized.
+      [[ $# -lt 1 ]] && die "add requires <deployId>"
+      cmd_add_azure "$kubeconfig" "$provider"
+      ;;
+  esac
+}
+
+cmd_list() {
+  local kubeconfig="$1"
+  list_contexts "$kubeconfig"
+}
+
+cmd_use() {
+  local kubeconfig="$1"
+  local ctx="$2"
+  kubectl_cfg "$kubeconfig" config use-context "$ctx"
+}
+
+cmd_current() {
+  local kubeconfig="$1"
+  kubectl_cfg "$kubeconfig" config current-context
+}
+
+cmd_delete_context() {
+  local kubeconfig="$1"
+  local name="${2:-}"
+
+  if [[ -n "$name" ]]; then
+    err "Deleting context: $name"
+    kubectl_cfg "$kubeconfig" config delete-context "$name"
+    return 0
+  fi
+
+  mapfile -t contexts < <(list_context_names "$kubeconfig")
+  if (( ${#contexts[@]} == 0 )); then
+    die "No contexts found"
+  fi
+
+  local -a selected=()
+  if mapfile -t selected < <(choose_many "Select context(s) to delete:" "${contexts[@]}"); then
+    :
+  else
+    err "Cancelled"
+    return 1
+  fi
+
+  echo "About to delete ${#selected[@]} context(s):"
+  printf '  - %s\n' "${selected[@]}"
+  echo
+  local confirm
+  confirm="$(prompt "Type 'yes' to confirm: ")"
+  echo
+  [[ "$confirm" != "yes" ]] && { err "Aborted"; return 1; }
+
+  local ctx
+  for ctx in "${selected[@]}"; do
+    err "Deleting context: $ctx"
+    kubectl_cfg "$kubeconfig" config delete-context "$ctx"
+  done
+}
+
+cmd_delete_cluster() {
+  local kubeconfig="$1"
+  local name="${2:-}"
+
+  if [[ -n "$name" ]]; then
+    err "Deleting cluster: $name"
+    kubectl_cfg "$kubeconfig" config delete-cluster "$name"
+    return 0
+  fi
+
+  mapfile -t clusters < <(list_cluster_names "$kubeconfig" | tail -n +2)
+  if (( ${#clusters[@]} == 0 )); then
+    die "No clusters found"
+  fi
+
+  local -a selected=()
+  if mapfile -t selected < <(choose_many "Select cluster(s) to delete:" "${clusters[@]}"); then
+    :
+  else
+    err "Cancelled"
+    return 1
+  fi
+
+  echo "About to delete ${#selected[@]} cluster(s):"
+  printf '  - %s\n' "${selected[@]}"
+  echo
+  local confirm
+  confirm="$(prompt "Type 'yes' to confirm: ")"
+  echo
+  [[ "$confirm" != "yes" ]] && { err "Aborted"; return 1; }
+
+  local cl
+  for cl in "${selected[@]}"; do
+    err "Deleting cluster: $cl"
+    kubectl_cfg "$kubeconfig" config delete-cluster "$cl"
+  done
+
+  err "Note: deleting a cluster does not automatically delete contexts/users that reference it."
+}
+
+cmd_delete() {
+  local kubeconfig="$1"
+  local ctx="${2:-}"
+
+  # If no context provided, choose interactively.
+  if [[ -z "$ctx" ]]; then
+    mapfile -t contexts < <(list_context_names "$kubeconfig")
+    if (( ${#contexts[@]} == 0 )); then
+      die "No contexts found"
+    fi
+
+    if ! ctx="$(choose_one "Select context to delete:" "${contexts[@]}")"; then
+      err "Cancelled"
+      return 1
+    fi
+  fi
+
+  # Ensure context exists.
+  if ! kubectl_cfg "$kubeconfig" config get-contexts -o name | grep -qx "$ctx"; then
+    die "Context not found: $ctx"
+  fi
+
+  local cluster user
+  cluster="$(get_context_cluster "$kubeconfig" "$ctx" || true)"
+  user="$(get_context_user "$kubeconfig" "$ctx" || true)"
+
+  # Determine whether cluster/user are referenced by other contexts.
+  local cluster_refs user_refs
+  cluster_refs=0
+  user_refs=0
+  if [[ -n "$cluster" ]]; then
+    cluster_refs="$(count_other_context_refs_cluster "$kubeconfig" "$ctx" "$cluster")"
+  fi
+  if [[ -n "$user" ]]; then
+    user_refs="$(count_other_context_refs_user "$kubeconfig" "$ctx" "$user")"
+  fi
+
+  echo "About to delete from kubeconfig: $kubeconfig"
+  echo "  - context: $ctx"
+  if [[ -n "$cluster" ]]; then
+    if [[ "$cluster_refs" == "0" ]]; then
+      echo "  - cluster: $cluster (will be removed)"
+    else
+      echo "  - cluster: $cluster (kept; referenced by $cluster_refs other context(s))"
+    fi
+  else
+    echo "  - cluster: <unknown>"
+  fi
+
+  if [[ -n "$user" ]]; then
+    if [[ "$user_refs" == "0" ]]; then
+      echo "  - user:    $user (will be removed)"
+    else
+      echo "  - user:    $user (kept; referenced by $user_refs other context(s))"
+    fi
+  else
+    echo "  - user:    <unknown>"
+  fi
+  echo
+
+  local confirm
+  confirm="$(prompt "Type 'yes' to confirm: ")"
+  echo
+  [[ "$confirm" != "yes" ]] && { err "Aborted"; return 1; }
+
+  # Delete context first.
+  err "Deleting context: $ctx"
+  kubectl_cfg "$kubeconfig" config delete-context "$ctx"
+
+  # Delete cluster if no longer referenced.
+  if [[ -n "$cluster" && "$cluster_refs" == "0" ]]; then
+    err "Deleting cluster: $cluster"
+    kubectl_cfg "$kubeconfig" config delete-cluster "$cluster" || true
+  fi
+
+  # Delete user if no longer referenced.
+  if [[ -n "$user" && "$user_refs" == "0" ]]; then
+    err "Deleting user: $user"
+    # kubectl has delete-user, but older versions may not; fallback to unset.
+    if kubectl_cfg "$kubeconfig" config --help 2>/dev/null | grep -q "delete-user"; then
+      kubectl_cfg "$kubeconfig" config delete-user "$user" || true
+    else
+      kubectl_cfg "$kubeconfig" config unset "users.${user}" || true
+    fi
+  fi
+
+  err "Done."
+}
+
+cmd_completion() {
+  local shell="${2:-bash}"
+
+  case "$shell" in
+    bash)
+      cat <<'EOF'
+# Bash completion for cm
+# Usage:
+#   source <(cm completion bash)
+# Or add to your shell rc:
+#   eval "$(cm completion bash)"
+
+_cm_complete() {
+  local cur prev words cword
+  _init_completion -n : || return
+
+  local cmds="add list get-contexts use current delete delete-context delete-cluster completion"
+
+  if [[ ${cword} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "${cmds}" -- "${cur}") )
+    return
+  fi
+
+  prev="${words[cword-1]}"
+
+  case "${words[1]}" in
+    use|delete|delete-context)
+      local kubeconfig
+      kubeconfig="${CM_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}"
+      local contexts
+      contexts="$(KUBECONFIG="$kubeconfig" kubectl config get-contexts -o name 2>/dev/null)"
+      COMPREPLY=( $(compgen -W "${contexts}" -- "${cur}") )
+      return
+      ;;
+    add)
+      if [[ ${cword} -eq 2 ]]; then
+        COMPREPLY=( $(compgen -W "azure aws gcp" -- "${cur}") )
+        return
+      fi
+      ;;
+  esac
+}
+
+# Requires bash-completion (provides _init_completion)
+complete -F _cm_complete cm
+EOF
+      ;;
+    zsh)
+      cat <<'EOF'
+# Zsh completion for cm
+# Usage:
+#   source <(cm completion zsh)
+# Or add to your ~/.zshrc:
+#   eval "$(cm completion zsh)"
+
+#compdef cm
+
+_cm() {
+  local -a cmds
+  cmds=(
+    'add:Add credentials for a cluster'
+    'list:List contexts'
+    'get-contexts:List contexts'
+    'use:Switch context'
+    'current:Print current context'
+    'delete:Delete context and associated cluster/user'
+    'delete-context:Delete a context'
+    'delete-cluster:Delete a cluster'
+    'completion:Print completion script'
+  )
+
+  _arguments \
+    '1:command:->cmds' \
+    '*::args:->args'
+
+  case $state in
+    cmds)
+      _describe 'command' cmds
+      ;;
+    args)
+      case $words[2] in
+        (use|delete|delete-context)
+          local kubeconfig contexts
+          kubeconfig=${CM_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}
+          contexts=(${(f)"$(KUBECONFIG=$kubeconfig kubectl config get-contexts -o name 2>/dev/null)"})
+          _describe 'context' contexts
+          ;;
+        (add)
+          if [[ $CURRENT -eq 3 ]]; then
+            _values 'provider' azure aws gcp
+          fi
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_cm "$@"
+EOF
+      ;;
+    *)
+      die "Unsupported shell for completion: $shell (use bash or zsh)"
+      ;;
+  esac
+}
+
+main() {
+  require kubectl
+
+  local kubeconfig="$CM_KUBECONFIG_DEFAULT"
+
+  # Simple arg parsing for --kubeconfig / -k
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -k|--kubeconfig)
+        [[ $# -lt 2 ]] && die "Missing value for $1"
+        kubeconfig="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    add)
+      [[ $# -lt 1 ]] && die "add requires <deployId> OR <provider> ... (use --help)"
+      cmd_add "$kubeconfig" "$@"
+      ;;
+    list|get-contexts)
+      cmd_list "$kubeconfig"
+      ;;
+    use)
+      [[ $# -lt 1 ]] && die "use requires <context>"
+      cmd_use "$kubeconfig" "$1"
+      ;;
+    current)
+      cmd_current "$kubeconfig"
+      ;;
+    delete)
+      cmd_delete "$kubeconfig" "${1:-}"
+      ;;
+    delete-context|rm-context|remove-context)
+      cmd_delete_context "$kubeconfig" "${1:-}"
+      ;;
+    delete-cluster|rm-cluster|remove-cluster)
+      cmd_delete_cluster "$kubeconfig" "${1:-}"
+      ;;
+    completion)
+      cmd_completion "$kubeconfig" "${1:-bash}"
+      ;;
+    "")
+      usage
+      exit 1
+      ;;
+    *)
+      die "Unknown command: $cmd (use --help)"
+      ;;
+  esac
+}
+
+main "$@"

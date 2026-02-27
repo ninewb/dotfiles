@@ -58,6 +58,7 @@ case "$OS" in
 : "${INSTALL_K9S:=1}"
 : "${INSTALL_RUST:=1}"
 : "${INSTALL_STARSHIP:=1}"
+: "${INSTALL_FZF:=1}"
 
 # -------- CLI argument parsing --------
 print_help() {
@@ -80,6 +81,7 @@ Options:
   --install-k9s <true|false>
   --install-rust <true|false>
   --install-starship <true|false>
+  --install-fzf <true|false>
   --install-claude <true|false>
   --help
 
@@ -96,6 +98,7 @@ Environment variables (optional):
   INSTALL_K9S          (default: 1)  set to 0 to skip k9s
   INSTALL_RUST         (default: 1)  set to 0 to skip rustup/cargo
   INSTALL_STARSHIP     (default: 1)  set to 0 to skip starship
+  INSTALL_FZF          (default: 1)  set to 0 to skip fzf
   INSTALL_CLAUDE        (default: 1)  set to 0 to skip Claude install
 
 Examples:
@@ -177,6 +180,9 @@ parse_args() {
       --install-starship)
         [[ $# -ge 2 ]] || { echo "--install-starship requires true|false" >&2; exit 2; }
         _set_bool_var INSTALL_STARSHIP "$2"; shift 2 ;;
+      --install-fzf)
+        [[ $# -ge 2 ]] || { echo "--install-fzf requires true|false" >&2; exit 2; }
+        _set_bool_var INSTALL_FZF "$2"; shift 2 ;;
       --install-claude)
         [[ $# -ge 2 ]] || { echo "--install-claude requires true|false" >&2; exit 2; }
         _set_bool_var INSTALL_CLAUDE "$2"; shift 2 ;;
@@ -190,6 +196,7 @@ parse_args() {
       --no-install-k9s) INSTALL_K9S=0; shift ;;
       --no-install-rust) INSTALL_RUST=0; shift ;;
       --no-install-starship) INSTALL_STARSHIP=0; shift ;;
+      --no-install-fzf) INSTALL_FZF=0; shift ;;
       --no-install-claude) INSTALL_CLAUDE=0; shift ;;
 
       *)
@@ -507,7 +514,9 @@ install_macos_packages() {
   brew_ensure_formula tmux
   brew_ensure_formula zsh
   brew_ensure_formula jq
-  brew_ensure_formula fzf
+  if [[ "$INSTALL_FZF" == "1" ]]; then
+    brew_ensure_formula fzf
+  fi
   if [[ "$INSTALL_STARSHIP" == "1" ]]; then
     brew_ensure_formula starship
   fi
@@ -573,9 +582,28 @@ install_linux_packages() {
     tmux \
     neovim \
     zsh \
-    fzf \
     python3 \
     python3-pip
+
+  if [[ "$INSTALL_FZF" == "1" ]]; then
+    sudo apt-get install -y --no-install-recommends fzf || true
+    if ! has fzf; then
+      _h "Linux: installing fzf (fallback git install)"
+      # Best-effort fallback: install fzf from git into ~/.fzf
+      need_cmd git
+      local fzf_dir="$HOME/.fzf"
+      if [[ -d "$fzf_dir/.git" ]]; then
+        ( cd "$fzf_dir" && git pull --ff-only ) || true
+      else
+        git clone --depth 1 https://github.com/junegunn/fzf.git "$fzf_dir" || true
+      fi
+      if [[ -x "$fzf_dir/install" ]]; then
+        "$fzf_dir/install" --bin --no-update-rc --no-key-bindings --no-completion || true
+        # Add ~/.fzf/bin for the remainder of the script
+        export PATH="$fzf_dir/bin:$PATH"
+      fi
+    fi
+  fi
 
   if [[ "$INSTALL_STARSHIP" == "1" ]]; then
     sudo apt-get install -y --no-install-recommends starship || true
@@ -799,7 +827,7 @@ post_checks() {
   fi
 
   local -a checks
-  checks=(git stow nvim tmux zsh python3 pip3)
+  checks=(git stow nvim tmux zsh jq fzf python3 pip3)
 
   if [[ "$INSTALL_KUBECTL" == "1" ]]; then
     checks+=(kubectl)
