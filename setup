@@ -250,6 +250,29 @@ brew_ensure_cask() {
   echo "brew: cask $cask already up-to-date"
 }
 
+brew_ensure_cask_appdir() {
+  local cask="$1"
+  local appdir="$2"
+
+  mkdir -p "$appdir"
+
+  # casks are listed by token
+  if ! brew list --cask "$cask" >/dev/null 2>&1; then
+    echo "brew: install cask $cask (appdir: $appdir)"
+    HOMEBREW_CASK_OPTS="--appdir=$appdir" brew install --cask "$cask"
+    return 0
+  fi
+
+  # For casks, `brew outdated --cask <name>` prints the name if outdated
+  if [[ -n "$(brew outdated --cask "$cask" 2>/dev/null || true)" ]]; then
+    echo "brew: upgrade cask $cask"
+    brew upgrade --cask "$cask"
+    return 0
+  fi
+
+  echo "brew: cask $cask already up-to-date"
+}
+
 ensure_brew_in_path() {
   if [[ $IS_DARWIN -eq 1 ]]; then
     if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -538,19 +561,19 @@ install_macos_packages() {
   fi
 
   if [[ "$INSTALL_GUI" == "1" ]]; then
-    # Install Kitty (terminal emulator)
-    brew_ensure_cask kitty
+    # Install Kitty (terminal emulator) into the user Applications directory
+    # to avoid requiring sudo for /Applications in managed environments.
+    local user_appdir="$HOME/Applications"
+    brew_ensure_cask_appdir kitty "$user_appdir"
 
-    # Best-effort: ensure app exists in standard macOS locations
-    if [[ -d "$HOME/Applications/Kitty.app" ]]; then
-      :
-    elif [[ -d "/Applications/Kitty.app" ]]; then
+    # Best-effort: ensure app exists where we asked Homebrew to put it.
+    if [[ -d "$HOME/Applications/kitty.app" || -d "$HOME/Applications/Kitty.app" ]]; then
       :
     elif [[ -d "$(brew --prefix)/Caskroom/kitty" ]]; then
+      # Fallback: if Homebrew installed into Caskroom, copy into ~/Applications.
       local app_src
-      app_src="$(ls -1d "$(brew --prefix)"/Caskroom/kitty/*/Kitty.app 2>/dev/null | tail -n 1 || true)"
+      app_src="$(ls -1d "$(brew --prefix)"/Caskroom/kitty/*/*.app 2>/dev/null | tail -n 1 || true)"
       if [[ -n "$app_src" ]]; then
-        mkdir -p "$HOME/Applications"
         rsync -a "$app_src" "$HOME/Applications/" >/dev/null 2>&1 || true
       fi
     fi
