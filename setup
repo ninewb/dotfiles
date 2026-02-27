@@ -857,16 +857,7 @@ setup_dotfiles() {
       if [[ -d "$DOTFILES_DIR/$pkg" ]]; then
         echo "stow: $pkg"
         # Use --restow so reruns refresh symlinks; use -v to show conflicts clearly.
-        # NOTE: `tmux-status` is currently provided by the `tmux` stow package at:
-        #   tmux/.local/bin/tmux-status -> ~/.local/bin/tmux-status
-        # The `bin` package also contains .local/bin/tmux-status, which causes a stow conflict
-        # and prevents new scripts (e.g. `cm`) from being linked.
-        # We intentionally ignore that single path when stowing `bin`.
-        if [[ "$pkg" == "bin" ]]; then
-          ( cd "$DOTFILES_DIR" && stow -v --restow "$pkg" -t "$HOME" --ignore='^\.local/bin/tmux-status$' ) || echo "stow: package '$pkg' had conflicts; skipping" >&2
-        else
-          ( cd "$DOTFILES_DIR" && stow -v --restow "$pkg" -t "$HOME" ) || echo "stow: package '$pkg' had conflicts; skipping" >&2
-        fi
+        ( cd "$DOTFILES_DIR" && stow -v --restow "$pkg" -t "$HOME" ) || echo "stow: package '$pkg' had conflicts; skipping" >&2
       else
         echo "stow: skipping missing package '$pkg' (no directory at $DOTFILES_DIR/$pkg)" >&2
       fi
