@@ -365,23 +365,52 @@ ensure_zsh_config() {
   local zdot="$HOME/.config/zsh"
   mkdir -p "$zdot"
 
+  local zlocal="$HOME/.config/zsh-local"
+  mkdir -p "$zlocal"
+
+  # If ~/.config/zsh is a symlink into the dotfiles repo (because of stow),
+  # do NOT write generated files into it. Write to ~/.config/zsh-local instead.
+  local zdot_is_symlink=0
+  if [[ -L "$zdot" ]]; then
+    zdot_is_symlink=1
+  fi
+
   local home_zshenv="$HOME/.zshenv"
   touch "$home_zshenv"
   if ! grep -q '^export ZDOTDIR=' "$home_zshenv"; then
     printf '\nexport ZDOTDIR="$HOME"/.config/zsh\n' >> "$home_zshenv"
+    # Allow local overrides that should NOT live in the dotfiles repo
+    # (prevents bootstrap-generated state from dirtying the git working tree).
+    if ! grep -q '^# >>> dotfiles zsh-local >>>' "$home_zshenv"; then
+      cat >> "$home_zshenv" <<'EOF'
+
+# >>> dotfiles zsh-local >>>
+# Local zsh overrides/state (kept out of dotfiles repo)
+if [[ -d "$HOME/.config/zsh-local" ]]; then
+  for f in "$HOME"/.config/zsh-local/*.zsh(N); do
+    [[ -r "$f" ]] && source "$f"
+  done
+fi
+# <<< dotfiles zsh-local <<<
+EOF
+    fi
   fi
 
   local zdot_zshenv="$zdot/.zshenv"
-  touch "$zdot_zshenv"
+  local bootstrap_target="$zdot_zshenv"
+  if [[ "$zdot_is_symlink" == "1" ]]; then
+    bootstrap_target="$zlocal/00-bootstrap.zsh"
+  fi
+  touch "$bootstrap_target"
 
   # Remove old/bad cargo env source if present
-  if grep -q '"\$HOME/\.local/lib/cargo/env"' "$zdot_zshenv" 2>/dev/null; then
-    perl -0777 -i -pe 's/^.*\"\$HOME\/.local\/lib\/cargo\/env\".*\n//mg' "$zdot_zshenv" || true
+  if grep -q '"\$HOME/\.local/lib/cargo/env"' "$bootstrap_target" 2>/dev/null; then
+    perl -0777 -i -pe 's/^.*\"\$HOME\/.local\/lib\/cargo\/env\".*\n//mg' "$bootstrap_target" || true
   fi
 
   # Ensure rustup cargo env is sourced if available
-  if ! grep -q '^\.[[:space:]]\+"\$HOME/\.cargo/env"' "$zdot_zshenv" 2>/dev/null; then
-    printf '\n# rustup/cargo (installed by setup)\nif [[ -f "$HOME/.cargo/env" ]]; then\n  . "$HOME/.cargo/env"\nfi\n' >> "$zdot_zshenv"
+  if ! grep -q '^\.[[:space:]]\+"\$HOME/\.cargo/env"' "$bootstrap_target" 2>/dev/null; then
+    printf '\n# rustup/cargo (installed by setup)\nif [[ -f "$HOME/.cargo/env" ]]; then\n  . "$HOME/.cargo/env"\nfi\n' >> "$bootstrap_target"
   fi
 
   # Ensure PATH basics are present for every zsh (including non-interactive shells)
@@ -390,9 +419,9 @@ ensure_zsh_config() {
   local marker_end="# <<< dotfiles PATH <<<"
 
   # Remove existing managed PATH block if present
-  perl -0777 -i -pe "s/\n?\Q${marker_begin}\E.*?\Q${marker_end}\E\n?/\n/sg" "$zdot_zshenv" 2>/dev/null || true
+  perl -0777 -i -pe "s/\n?\Q${marker_begin}\E.*?\Q${marker_end}\E\n?/\n/sg" "$bootstrap_target" 2>/dev/null || true
 
-  cat >> "$zdot_zshenv" <<'EOF'
+  cat >> "$bootstrap_target" <<'EOF'
 
 # >>> dotfiles PATH >>>
 # Base PATH hygiene (runs for every zsh)
@@ -423,6 +452,9 @@ export PATH
 EOF
 
   local path_zsh="$zdot/00-path.zsh"
+  if [[ "$zdot_is_symlink" == "1" ]]; then
+    path_zsh="$zlocal/00-path.zsh"
+  fi
   if [[ ! -f "$path_zsh" ]]; then
     cat > "$path_zsh" <<'EOF'
 # Base PATH hygiene for interactive shells
@@ -454,6 +486,9 @@ EOF
   fi
 
   local brew_zsh="$zdot/10-homebrew.zsh"
+  if [[ "$zdot_is_symlink" == "1" ]]; then
+    brew_zsh="$zlocal/10-homebrew.zsh"
+  fi
   if [[ ! -f "$brew_zsh" ]]; then
     cat > "$brew_zsh" <<'EOF'
 # Homebrew PATH for interactive shells
@@ -466,10 +501,23 @@ EOF
   fi
 
   local cargo_zsh="$zdot/20-cargo.zsh"
+  if [[ "$zdot_is_symlink" == "1" ]]; then
+    cargo_zsh="$zlocal/20-cargo.zsh"
+  fi
   if [[ ! -f "$cargo_zsh" ]]; then
     cat > "$cargo_zsh" <<'EOF'
 # Cargo PATH for interactive shells
 export PATH="$HOME/.cargo/bin:$PATH"
+EOF
+  fi
+
+  local history_zsh="$zlocal/90-history.zsh"
+  if [[ ! -f "$history_zsh" ]]; then
+    cat > "$history_zsh" <<'EOF'
+# Keep zsh state out of the dotfiles repo
+export HISTFILE="$HOME/.zsh_history"
+export ZSH_SESSION_DIR="$HOME/.zsh_sessions"
+mkdir -p "$ZSH_SESSION_DIR" 2>/dev/null || true
 EOF
   fi
 
@@ -488,6 +536,10 @@ EOF
   fi
 
   local zshrc="$zdot/.zshrc"
+  if [[ "$zdot_is_symlink" == "1" ]]; then
+    # zshrc is managed by stow (symlink into repo); do not modify it here.
+    return 0
+  fi
   local desired_zshrc
   desired_zshrc=$'for config in "$HOME"/.config/zsh/*.zsh(N); do\n  [[ -r "$config" ]] && source "$config"\ndone\n'
 
