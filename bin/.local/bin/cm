@@ -13,7 +13,7 @@ Usage:
 Commands:
   add <resource>                                  Add AKS credentials/context for <resource> (default: azure)
   add azure <resource>                            Add AKS credentials/context for <resource>
-  add aws <cluster> <region> [alias]              Add EKS credentials/context (optional context alias)
+  add aws <cluster> <region> [alias]               Add EKS credentials/context (optional context alias)
   add gcp <cluster> <location> <project> [alias]  Add GKE credentials/context (location is region or zone; optional context alias)
   list                                            List contexts (kubectl config get-contexts)
   use [<context>]                                 Switch current context (interactive if no context)
@@ -29,12 +29,11 @@ Notes:
 Examples:
   cm add my-awesome-resource
   cm add azure my-awesome-resource
-  cm add aws prod-eks us-east-1 aws-prod-eks
-  cm add gcp analytics-cluster us-central1 my-project gcp-analytics
   cm list
   cm use my-awesome-resource
+  cm add aws prod-eks us-east-1 aws-prod-eks
+  cm add gcp analytics-cluster us-central1 my-project gcp-analytics
   cm delete
-  cm delete aws-prod-eks
 EOF
 }
 
@@ -46,7 +45,6 @@ require() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
-# Lowercase helper (bash 3.2 compatible)
 _lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # Filter items by a case-insensitive substring.
@@ -146,69 +144,6 @@ select_one_tui() {
   done
 }
 
-# Minimal portable multi-selector with filtering.
-# Prints selected items, one per line.
-select_many_tui() {
-  local title="$1"; shift
-  local -a items=("$@")
-
-  local count="${#items[@]}"
-  (( count == 0 )) && die "No items to choose from"
-
-  local filter=""
-  while true; do
-    echo "$title" >&2
-    echo "Filter (substring, Enter for all, or type 'q' to cancel): " >&2
-    printf '> ' >&2
-    filter="$(read_tty_line)"
-    [[ "$filter" == "q" ]] && return 1
-
-    local -a filtered=()
-    if [[ -z "$filter" ]]; then
-      filtered=("${items[@]}")
-    else
-      read_lines_into_array filtered < <(filter_items "$filter" "${items[@]}")
-    fi
-
-    if (( ${#filtered[@]} == 0 )); then
-      echo "No matches. Try again." >&2
-      echo >&2
-      continue
-    fi
-
-    echo >&2
-    print_numbered "${filtered[@]}" >&2
-    echo >&2
-    echo "Enter numbers (e.g. 1,3,5-7), 'all', 'r' to refine filter, or Enter to cancel." >&2
-    printf '> ' >&2
-    local selection
-    selection="$(read_tty_line)"
-
-    [[ -z "$selection" ]] && return 1
-    [[ "$selection" == "r" ]] && { echo >&2; continue; }
-
-    # normalize: remove spaces
-    selection="${selection// /}"
-
-    # Allow "all"
-    if [[ "$selection" == "all" ]]; then
-      printf '%s\n' "${filtered[@]}"
-      return 0
-    fi
-
-    # Convert indices using existing parser.
-    local -A seen=()
-    local idx
-    while read -r idx; do
-      [[ -z "$idx" ]] && continue
-      if [[ -z "${seen[$idx]+x}" ]]; then
-        seen[$idx]=1
-        printf '%s\n' "${filtered[$idx]}"
-      fi
-    done < <(parse_selection_to_indices "$selection" "${#filtered[@]}")
-    return 0
-  done
-}
 
 # Bash 3.2 compatibility: `mapfile` is not available on macOS.
 # Read lines from stdin into a named array variable.
@@ -239,14 +174,6 @@ cmd_to_array() {
   read_lines_into_array "$__arr_name" < <("$@")
 }
 
-# Capture the output of a pipeline (provided as a string) into a named array.
-# Use sparingly; intended for cases where we already build a pipeline with args.
-pipeline_to_array() {
-  local __arr_name="$1"
-  local __pipeline="$2"
-  # shellcheck disable=SC2090
-  read_lines_into_array "$__arr_name" < <(eval "$__pipeline")
-}
 
 # Run kubectl against a specific kubeconfig, without forcing users to export env vars.
 kubectl_cfg() {
@@ -283,60 +210,7 @@ print_numbered() {
   done
 }
 
-# Parse a selection string like: "1,2,5-7" into indices (0-based)
-# Prints indices, one per line.
-parse_selection_to_indices() {
-  local selection="$1"
-  local max="$2"  # number of items
 
-  # normalize: remove spaces
-  selection="${selection// /}"
-
-  # Allow "all"
-  if [[ "$selection" == "all" ]]; then
-    for ((i=0;i<max;i++)); do echo "$i"; done
-    return 0
-  fi
-
-  local IFS=','
-  read -r -a parts <<< "$selection"
-
-  local part
-  for part in "${parts[@]}"; do
-    [[ -z "$part" ]] && continue
-
-    if [[ "$part" =~ ^[0-9]+-[0-9]+$ ]]; then
-      local start="${part%-*}"
-      local end="${part#*-}"
-      # Convert to 0-based
-      start=$((start-1))
-      end=$((end-1))
-      if (( start < 0 || end < 0 || start >= max || end >= max )); then
-        die "Selection out of range: $part"
-      fi
-      if (( start > end )); then
-        die "Invalid range (start > end): $part"
-      fi
-      for ((i=start;i<=end;i++)); do echo "$i"; done
-
-    elif [[ "$part" =~ ^[0-9]+$ ]]; then
-      local idx=$((part-1))
-      if (( idx < 0 || idx >= max )); then
-        die "Selection out of range: $part"
-      fi
-      echo "$idx"
-
-    else
-      die "Invalid selection token: $part"
-    fi
-  done
-}
-
-choose_many() {
-  local title="$1"; shift
-  local -a items=("$@")
-  select_many_tui "$title" "${items[@]}"
-}
 
 choose_one() {
   local title="$1"; shift
@@ -581,83 +455,7 @@ cmd_current() {
   kubectl_cfg "$kubeconfig" config current-context
 }
 
-cmd_delete_context() {
-  local kubeconfig="$1"
-  local name="${2:-}"
 
-  if [[ -n "$name" ]]; then
-    err "Deleting context: $name"
-    kubectl_cfg "$kubeconfig" config delete-context "$name"
-    return 0
-  fi
-
-  cmd_to_array contexts list_context_names "$kubeconfig"
-  if (( ${#contexts[@]} == 0 )); then
-    die "No contexts found"
-  fi
-
-  local -a selected=()
-  if read_lines_into_array selected < <(choose_many "Select context(s) to delete:" "${contexts[@]}"); then
-    :
-  else
-    err "Cancelled"
-    return 1
-  fi
-
-  echo "About to delete ${#selected[@]} context(s):"
-  printf '  - %s\n' "${selected[@]}"
-  echo
-  local confirm
-  confirm="$(prompt "Type 'yes' to confirm: ")"
-  echo
-  [[ "$confirm" != "yes" ]] && { err "Aborted"; return 1; }
-
-  local ctx
-  for ctx in "${selected[@]}"; do
-    err "Deleting context: $ctx"
-    kubectl_cfg "$kubeconfig" config delete-context "$ctx"
-  done
-}
-
-cmd_delete_cluster() {
-  local kubeconfig="$1"
-  local name="${2:-}"
-
-  if [[ -n "$name" ]]; then
-    err "Deleting cluster: $name"
-    kubectl_cfg "$kubeconfig" config delete-cluster "$name"
-    return 0
-  fi
-
-  pipeline_to_array clusters "list_cluster_names \"$kubeconfig\" | tail -n +2"
-  if (( ${#clusters[@]} == 0 )); then
-    die "No clusters found"
-  fi
-
-  local -a selected=()
-  if read_lines_into_array selected < <(choose_many "Select cluster(s) to delete:" "${clusters[@]}"); then
-    :
-  else
-    err "Cancelled"
-    return 1
-  fi
-
-  echo "About to delete ${#selected[@]} cluster(s):"
-  printf '  - %s\n' "${selected[@]}"
-  echo
-  local confirm
-  confirm="$(prompt "Type 'yes' to confirm: ")"
-  echo
-  [[ "$confirm" != "yes" ]] && { err "Aborted"; return 1; }
-
-  local cl
-  for cl in "${selected[@]}"; do
-    err "Deleting cluster: $cl"
-    kubectl_cfg "$kubeconfig" config delete-cluster "$cl"
-  done
-
-  err "Note: deleting a cluster does not automatically delete contexts/users that reference it."
-}
 
 cmd_delete() {
   local kubeconfig="$1"
@@ -748,111 +546,6 @@ cmd_delete() {
   err "Done."
 }
 
-cmd_completion() {
-  local shell="${2:-bash}"
-
-  case "$shell" in
-    bash)
-      cat <<'EOF'
-# Bash completion for cm
-# Usage:
-#   source <(cm completion bash)
-# Or add to your shell rc:
-#   eval "$(cm completion bash)"
-
-_cm_complete() {
-  local cur prev words cword
-  _init_completion -n : || return
-
-  local cmds="add list get-contexts use current delete delete-context delete-cluster completion"
-
-  if [[ ${cword} -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "${cmds}" -- "${cur}") )
-    return
-  fi
-
-  prev="${words[cword-1]}"
-
-  case "${words[1]}" in
-    use|delete|delete-context)
-      local kubeconfig
-      kubeconfig="${CM_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}"
-      local contexts
-      contexts="$(KUBECONFIG="$kubeconfig" kubectl config get-contexts -o name 2>/dev/null)"
-      COMPREPLY=( $(compgen -W "${contexts}" -- "${cur}") )
-      return
-      ;;
-    add)
-      if [[ ${cword} -eq 2 ]]; then
-        COMPREPLY=( $(compgen -W "azure aws gcp" -- "${cur}") )
-        return
-      fi
-      ;;
-  esac
-}
-
-# Requires bash-completion (provides _init_completion)
-complete -F _cm_complete cm
-EOF
-      ;;
-    zsh)
-      cat <<'EOF'
-# Zsh completion for cm
-# Usage:
-#   source <(cm completion zsh)
-# Or add to your ~/.zshrc:
-#   eval "$(cm completion zsh)"
-
-#compdef cm
-
-_cm() {
-  local -a cmds
-  cmds=(
-    'add:Add credentials for a cluster'
-    'list:List contexts'
-    'get-contexts:List contexts'
-    'use:Switch context'
-    'current:Print current context'
-    'delete:Delete context and associated cluster/user'
-    'delete-context:Delete a context'
-    'delete-cluster:Delete a cluster'
-    'completion:Print completion script'
-  )
-
-  _arguments \
-    '1:command:->cmds' \
-    '*::args:->args'
-
-  case $state in
-    cmds)
-      _describe 'command' cmds
-      ;;
-    args)
-      case $words[2] in
-        (use|delete|delete-context)
-          local kubeconfig contexts
-          kubeconfig=${CM_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}
-          contexts=(${(f)"$(KUBECONFIG=$kubeconfig kubectl config get-contexts -o name 2>/dev/null)"})
-          _describe 'context' contexts
-          ;;
-        (add)
-          if [[ $CURRENT -eq 3 ]]; then
-            _values 'provider' azure aws gcp
-          fi
-          ;;
-      esac
-      ;;
-  esac
-}
-
-_cm "$@"
-EOF
-      ;;
-    *)
-      die "Unsupported shell for completion: $shell (use bash or zsh)"
-      ;;
-  esac
-}
 
 main() {
   require kubectl
