@@ -7,34 +7,34 @@ CM_KUBECONFIG_DEFAULT="${CM_KUBECONFIG:-${KUBECONFIG:-$HOME/.kube/config}}"
 usage() {
   cat <<'EOF'
 Usage:
+  KUBERNETES CONTEXT MANAGER
   cm [--kubeconfig <path>] <command> [args]
 
 Commands:
-  add <deployId>                    Add AKS credentials/context for <deployId> (default: azure)
-  add azure <deployId>              Add AKS credentials/context for <deployId>
-  add aws <cluster> <region> [alias]  Add EKS credentials/context (optional context alias)
+  add <resource>                                  Add AKS credentials/context for <resource> (default: azure)
+  add azure <resource>                            Add AKS credentials/context for <resource>
+  add aws <cluster> <region> [alias]              Add EKS credentials/context (optional context alias)
   add gcp <cluster> <location> <project> [alias]  Add GKE credentials/context (location is region or zone; optional context alias)
-  list                     List contexts (kubectl config get-contexts)
-  use <context>            Switch current context
-  current                  Print current context
-  delete [<context>]         Delete a context and its associated cluster/user from kubeconfig (interactive if no context)
+  list                                            List contexts (kubectl config get-contexts)
+  use <context>                                   Switch current context
+  current                                         Print current context
+  delete [<context>]                              Delete a context and its associated cluster/user from kubeconfig (interactive if no context)
 
 Notes:
   - If CM_KUBECONFIG is set, it is used.
   - Otherwise KUBECONFIG is used.
   - Otherwise defaults to ~/.kube/config
+  - For Azure (AKS), <resource> is the base name used to derive the resource group and cluster: <resource>-rg and <resource>-aks.
 
 Examples:
-  cm add aml-essentials-56101
-  cm add azure aml-essentials-56101
+  cm add my-awesome-resource
+  cm add azure my-awesome-resource
   cm add aws prod-eks us-east-1 aws-prod-eks
   cm add gcp analytics-cluster us-central1 my-project gcp-analytics
   cm list
-  cm use aml-essentials-56101
-  cm delete-context
+  cm use my-awesome-resource
   cm delete
   cm delete aws-prod-eks
-  cm --kubeconfig ~/.kube/config delete-cluster
 EOF
 }
 
@@ -360,28 +360,28 @@ rename_context_best_effort() {
 
 cmd_add_azure() {
   local kubeconfig="$1"
-  local deployId="$2"
+  local resource="$2"
 
   require az
 
   # Convention:
-  #   Resource Group: <deployId>-rg
-  #   AKS Name:       <deployId>-aks
-  # Context name should be <deployId> (helps when you have many).
+  #   Resource Group: <resource>-rg
+  #   AKS Name:       <resource>-aks
+  # Context name should be <resource> (helps when you have many).
   #
   # Note: `az aks get-credentials` will merge into the provided kubeconfig.
-  err "Adding AKS credentials for deployId='$deployId' into kubeconfig: $kubeconfig"
+  err "Adding AKS credentials for resource='$resource' into kubeconfig: $kubeconfig"
 
   # Ensure kubeconfig directory exists.
   mkdir -p "$(dirname "$kubeconfig")"
 
   az aks get-credentials \
-    --resource-group "${deployId}-rg" \
-    --name "${deployId}-aks" \
+    --resource-group "${resource}-rg" \
+    --name "${resource}-aks" \
     --file "$kubeconfig" \
     --overwrite-existing
 
-  rename_context_best_effort "$kubeconfig" "$deployId"
+  rename_context_best_effort "$kubeconfig" "$resource"
   err "Done. Current context: $(kubectl_cfg "$kubeconfig" config current-context)"
 }
 
@@ -453,8 +453,8 @@ cmd_add() {
   shift
 
   # Back-compat:
-  #   cm add <deployId>            -> azure
-  #   cm add azure <deployId>
+  #   cm add <resource>           -> azure
+  #   cm add azure <resource>
   #   cm add aws <cluster> <region> [alias]
   #   cm add gcp <cluster> <location> <project> [alias]
 
@@ -462,7 +462,7 @@ cmd_add() {
 
   case "$provider" in
     azure)
-      [[ $# -lt 2 ]] && die "add azure requires <deployId>"
+      [[ $# -lt 2 ]] && die "add azure requires <resource>"
       cmd_add_azure "$kubeconfig" "$2"
       ;;
     aws)
@@ -474,8 +474,8 @@ cmd_add() {
       cmd_add_gcp "$kubeconfig" "$2" "$3" "$4" "${5:-}"
       ;;
     *)
-      # Default to azure deployId if provider is not recognized.
-      [[ $# -lt 1 ]] && die "add requires <deployId>"
+      # Default to azure resource if provider is not recognized.
+      [[ $# -lt 1 ]] && die "add requires <resource>"
       cmd_add_azure "$kubeconfig" "$provider"
       ;;
   esac
@@ -802,7 +802,7 @@ main() {
 
   case "$cmd" in
     add)
-      [[ $# -lt 1 ]] && die "add requires <deployId> OR <provider> ... (use --help)"
+      [[ $# -lt 1 ]] && die "add requires <resource> OR <provider> ... (use --help)"
       cmd_add "$kubeconfig" "$@"
       ;;
     list|get-contexts)
