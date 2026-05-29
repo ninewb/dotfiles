@@ -999,9 +999,10 @@ post_checks() {
   echo
   echo "Next steps:"
   echo "  1) Open a new terminal session (zsh)"
-  echo "  2) (Optional) Authenticate 1Password: op signin"
-  echo "  3) (Optional) Configure kubectl access (kubeconfig)"
-  echo "  4) Enable starship in zsh (add eval \"\$(starship init zsh)\" to your prompt config)"
+  echo "  2) Authenticate 1Password: op signin"
+  echo "  3) Update the VAULT_ID in .zshenv"
+  echo "  4) (Optional) Configure kubectl access (kubeconfig)"
+  echo "  5) Enable starship in zsh (add eval \"\$(starship init zsh)\" to your prompt config)"
 }
 
 main() {
