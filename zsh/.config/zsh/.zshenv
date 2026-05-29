@@ -11,3 +11,5 @@ path=(
 )
 
 export PATH
+
+export VAULT_ID=""
