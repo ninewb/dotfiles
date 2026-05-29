@@ -106,3 +106,9 @@ alias ct='cargo test'
 alias rm='rm -i'
 alias cp='cp -i'
 alias mv='mv -i'
+
+# ------------------------------------------------------------------------------
+# op (1password)
+# ------------------------------------------------------------------------------
+
+alias setenv="op run --no-masking --environment ${VAULT_ID:?'Error: VAULT_ID is not set!'} -- printenv"
