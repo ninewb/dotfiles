@@ -381,6 +381,10 @@ ensure_zsh_config() {
   if ! grep -q '^# >>> dotfiles bootstrap PATH >>>' "$home_zshenv"; then
     cat >> "$home_zshenv" <<'EOF'
 
+# Explicitly load custom zshenv right now
+if [ -f "$ZDOTDIR/.zshenv" ]; then
+    source "$ZDOTDIR/.zshenv"
+fi
 # >>> dotfiles bootstrap PATH >>>
 # Minimal PATH required for stowed scripts and Homebrew tools
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
